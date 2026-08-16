@@ -2,8 +2,14 @@
 # Auto-categorizes merged PRs by label into a draft release.
 # See https://github.com/release-drafter/release-drafter
 
-name-template: 'v$RESOLVED_VERSION'
-tag-template: 'v$RESOLVED_VERSION'
+# This project tags its release line as `vX.Y.Z-legacy`. Release Drafter's
+# resolver reads `-legacy` as a semver *pre-release*, so a `patch` bump from
+# `v0.2.0-legacy` would resolve to `0.2.0` and collide with the existing tag.
+# To keep every draft on the `-legacy` line we append the suffix explicitly and
+# drive everything except breaking changes through a `minor` bump (matching how
+# this repo actually advances: v0.1.0-legacy -> v0.2.0-legacy -> ...).
+name-template: 'v$RESOLVED_VERSION-legacy'
+tag-template: 'v$RESOLVED_VERSION-legacy'
 
 categories:
   - title: '💥 Breaking Changes'
@@ -39,6 +45,8 @@ change-template: '- $TITLE (#$NUMBER) by @$AUTHOR'
 change-title-escapes: '\<*_&#@`'
 
 # Map labels to semver bumps so the draft version resolves sensibly.
+# Note: with the `-legacy` pre-release suffix, `patch` collides with the current
+# tag, so fixes/chores/docs also advance through `minor` on this release line.
 version-resolver:
   major:
     labels:
@@ -50,8 +58,6 @@ version-resolver:
       - 'feature'
       - 'enhancement'
       - 'minor'
-  patch:
-    labels:
       - 'fix'
       - 'bug'
       - 'bugfix'
@@ -61,7 +67,7 @@ version-resolver:
       - 'maintenance'
       - 'documentation'
       - 'docs'
-  default: patch
+  default: minor
 
 template: |
   ## What's Changed
@@ -72,4 +78,4 @@ template: |
 
   **How to install/build** — see `CONTRIBUTING.md` or the README.
 
-  **Full diff:** https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
+  **Full diff:** https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION-legacy
