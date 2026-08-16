@@ -1,0 +1,63 @@
+name: Release
+
+# Publishes a GitHub Release whenever a version tag (v*) is pushed.
+# - Builds the extension (dist/) and the native messaging host (best-effort)
+# - Packages the extension into a zip
+# - Creates a DRAFT release with auto-generated notes so a human can review
+#   before publishing (this keeps the "review before publish" gate the project uses)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so changelog/notes tools can diff against the previous tag
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build extension
+        run: npm run build
+
+      - name: Package extension
+        run: |
+          zip -r "momo-extension-${GITHUB_REF_NAME}.zip" dist manifest.json
+
+      # The Rust native host may require platform-specific toolchains
+      # (e.g. CUDA / Metal for local LLM). Build it best-effort so a missing
+      # local toolchain doesn't block publishing the extension itself.
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build native messaging host (best-effort)
+        working-directory: bridge
+        continue-on-error: true
+        run: cargo build --release
+
+      - name: Publish draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: |
+            momo-extension-*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

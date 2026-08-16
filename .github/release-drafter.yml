@@ -1,0 +1,75 @@
+# Release Drafter configuration.
+# Auto-categorizes merged PRs by label into a draft release.
+# See https://github.com/release-drafter/release-drafter
+
+name-template: 'v$RESOLVED_VERSION'
+tag-template: 'v$RESOLVED_VERSION'
+
+categories:
+  - title: '💥 Breaking Changes'
+    labels:
+      - 'breaking-change'
+      - 'breaking'
+      - 'major'
+  - title: '🚀 Features'
+    labels:
+      - 'feature'
+      - 'enhancement'
+      - 'minor'
+  - title: '🐛 Fixes'
+    labels:
+      - 'fix'
+      - 'bug'
+      - 'bugfix'
+      - 'patch'
+  - title: '🧰 Chore / Internal'
+    labels:
+      - 'chore'
+      - 'refactor'
+      - 'maintenance'
+      - 'internal'
+  - title: '📝 Documentation'
+    labels:
+      - 'documentation'
+      - 'docs'
+
+change-template: '- $TITLE (#$NUMBER) by @$AUTHOR'
+
+# Skip the "(chore)" / "(fix)" prefixes already used by labels.
+change-title-escapes: '\<*_&#@`'
+
+# Map labels to semver bumps so the draft version resolves sensibly.
+version-resolver:
+  major:
+    labels:
+      - 'breaking-change'
+      - 'breaking'
+      - 'major'
+  minor:
+    labels:
+      - 'feature'
+      - 'enhancement'
+      - 'minor'
+  patch:
+    labels:
+      - 'fix'
+      - 'bug'
+      - 'bugfix'
+      - 'patch'
+      - 'chore'
+      - 'refactor'
+      - 'maintenance'
+      - 'documentation'
+      - 'docs'
+  default: patch
+
+template: |
+  ## What's Changed
+
+  $CHANGES
+
+  ---
+
+  **How to install/build** — see `CONTRIBUTING.md` or the README.
+
+  **Full diff:** https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
