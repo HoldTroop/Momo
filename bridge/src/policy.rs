@@ -1,16 +1,14 @@
 // Policy Engine + Audit Log
 // Per Architecture Blueprint Sections 5 & 7: JSON Schema validation, audit log, confirmation gates
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use parking_lot::RwLock;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{debug, info, warn};
 use url::Url;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -215,7 +213,7 @@ impl PolicyEngine {
     }
 
     pub fn save_config(&self, config: &PolicyConfig) -> Result<()> {
-        let db = self.db.write();
+        let mut db = self.db.write();
         let tx = db.transaction()?;
 
         let now = Utc::now().to_rfc3339();
@@ -240,23 +238,51 @@ impl PolicyEngine {
         Ok(())
     }
 
-    pub fn check_allowlist(&self, url: &str) -> bool {
+    /// Whether a URL or bare origin is allowed by the domain allowlist.
+    ///
+    /// Fails closed: an empty allowlist denies everything (the agent must be
+    /// explicitly configured with at least one trusted domain). Wildcard
+    /// entries (`*.example.com`) match the domain and its subdomains only —
+    /// never look-alike domains such as `evil-example.com`.
+    pub fn check_origin(&self, url: &str) -> bool {
         let config = self.config.read();
         if config.allowlist.is_empty() {
-            return true; // No allowlist = all allowed
+            return false;
         }
-        let origin = match Url::parse(url) {
-            Ok(u) => u.origin().ascii_serialization(),
-            Err(_) => return false,
-        };
+        let host = Self::normalize_host(url);
+        if host.is_empty() {
+            return false;
+        }
         config.allowlist.iter().any(|allowed| {
-            if allowed.starts_with("*.") {
-                let domain = &allowed[2..];
-                origin.ends_with(domain)
+            let wildcard = allowed.trim().starts_with("*.");
+            let domain = Self::normalize_host(allowed);
+            if domain.is_empty() {
+                return false;
+            }
+            if wildcard {
+                host == domain || host.ends_with(&format!(".{}", domain))
             } else {
-                origin == *allowed
+                host == domain
             }
         })
+    }
+
+    fn normalize_host(input: &str) -> String {
+        let trimmed = input.trim();
+        let stripped = trimmed.strip_prefix("*.").unwrap_or(trimmed);
+        if let Ok(u) = Url::parse(stripped) {
+            if let Some(host) = u.host_str() {
+                return host.to_lowercase();
+            }
+        }
+        stripped
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .split(['/', ':', '?', '#'])
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_lowercase()
     }
 
     pub fn check_action_permitted(&self, action: &str) -> bool {
@@ -270,10 +296,12 @@ impl PolicyEngine {
     pub fn evaluate(&self, request: &PolicyRequest) -> Result<PolicyDecision> {
         let config = self.config.read();
 
-        // Check allowlist for navigation
+        // Enforce the domain allowlist. Navigation is gated on the destination
+        // URL; every other action is gated on the current page origin. An empty
+        // allowlist denies everything (fail closed).
         if request.action == "navigate" {
             if let Some(url) = request.arguments.get("url").and_then(|v| v.as_str()) {
-                if !self.check_allowlist(url) {
+                if !self.check_origin(url) {
                     return Ok(PolicyDecision {
                         allowed: false,
                         requires_confirmation: false,
@@ -283,6 +311,14 @@ impl PolicyEngine {
                     });
                 }
             }
+        } else if !self.check_origin(&request.origin) {
+            return Ok(PolicyDecision {
+                allowed: false,
+                requires_confirmation: false,
+                reason: Some(format!("Origin not on allowlist: {}", request.origin)),
+                risk_class: self.classify_risk(&request.action),
+                confirmation_data: None,
+            });
         }
 
         // Check action permitted
@@ -349,6 +385,7 @@ impl PolicyEngine {
             "scroll" => RiskClass::Read,
             "wait" => RiskClass::Read,
             "observe" => RiskClass::Read,
+            "mouse_move" => RiskClass::Read,
             "human_click" => RiskClass::Write,
             "human_type" => RiskClass::Write,
             _ => RiskClass::Write,
@@ -364,6 +401,7 @@ impl PolicyEngine {
             "scroll" => 1,
             "wait" => 5,
             "observe" => 50,
+            "mouse_move" => 1,
             "human_click" => 10,
             "human_type" => 5,
             _ => 10,
@@ -387,7 +425,7 @@ impl PolicyEngine {
             ConfirmationPolicy::Never => false,
             ConfirmationPolicy::Sensitive => {
                 matches!(risk_class, RiskClass::Payment | RiskClass::Auth | RiskClass::Dangerous)
-                    || (request.action == "type" && self.is_sensitive_field(request))
+                    || (matches!(request.action.as_str(), "type" | "human_type") && self.is_sensitive_field(request))
             }
         }
     }
@@ -406,7 +444,7 @@ impl PolicyEngine {
     }
 
     fn is_reversible(&self, action: &str) -> bool {
-        matches!(action, "navigate" | "scroll" | "wait" | "observe" | "extract")
+        matches!(action, "navigate" | "scroll" | "wait" | "observe" | "extract" | "mouse_move")
     }
 
     pub fn log_audit(&self, entry: &AuditEntry) -> Result<()> {
@@ -494,4 +532,93 @@ pub struct PolicyRequest {
     pub origin: String,
     pub target: String,
     pub arguments: Value,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn engine_with_allowlist(allowlist: Vec<String>) -> PolicyEngine {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let path = std::env::temp_dir().join(format!(
+            "momo-policy-test-{}-{}.db",
+            std::process::id(),
+            n
+        ));
+        let engine = PolicyEngine::new(path.clone()).expect("open test db");
+        let mut config = PolicyConfig::default();
+        config.allowlist = allowlist;
+        engine.save_config(&config).expect("save config");
+        let _ = std::fs::remove_file(path);
+        engine
+    }
+
+    #[test]
+    fn empty_allowlist_fails_closed() {
+        let engine = engine_with_allowlist(vec![]);
+        assert!(!engine.check_origin("https://example.com"));
+        assert!(!engine.check_origin("https://example.com/path"));
+    }
+
+    #[test]
+    fn exact_domain_matches_only_that_domain() {
+        let engine = engine_with_allowlist(vec!["example.com".to_string()]);
+        assert!(engine.check_origin("https://example.com"));
+        assert!(engine.check_origin("https://example.com/path?q=1"));
+        assert!(!engine.check_origin("https://sub.example.com"));
+        assert!(!engine.check_origin("https://evil-example.com"));
+    }
+
+    #[test]
+    fn wildcard_matches_domain_and_subdomains_only() {
+        let engine = engine_with_allowlist(vec!["*.example.com".to_string()]);
+        assert!(engine.check_origin("https://example.com"));
+        assert!(engine.check_origin("https://sub.example.com"));
+        assert!(engine.check_origin("https://a.b.example.com"));
+        // Look-alike / suffix-attack domains must be denied.
+        assert!(!engine.check_origin("https://evil-example.com"));
+        assert!(!engine.check_origin("https://example.com.evil.com"));
+        assert!(!engine.check_origin("https://notexample.com"));
+    }
+
+    #[test]
+    fn host_normalization_handles_case_ports_and_scheme() {
+        let engine = engine_with_allowlist(vec!["*.example.com".to_string()]);
+        assert!(engine.check_origin("https://Example.COM:8443/path?q=1#frag"));
+        assert!(engine.check_origin("http://sub.example.com"));
+        // Malformed / bare junk hosts are never allowed.
+        assert!(!engine.check_origin("not-a-url"));
+        assert!(!engine.check_origin(""));
+    }
+
+    #[test]
+    fn evaluate_denies_non_allowlisted_origin() {
+        let engine = engine_with_allowlist(vec!["example.com".to_string()]);
+        let request = PolicyRequest {
+            session_id: "s1".into(),
+            action: "human_type".into(),
+            origin: "https://evil.com".into(),
+            target: "#password".into(),
+            arguments: Value::Null,
+        };
+        let decision = engine.evaluate(&request).expect("evaluate");
+        assert!(!decision.allowed);
+    }
+
+    #[test]
+    fn evaluate_denies_when_allowlist_empty() {
+        let engine = engine_with_allowlist(vec![]);
+        let request = PolicyRequest {
+            session_id: "s1".into(),
+            action: "human_click".into(),
+            origin: "https://example.com".into(),
+            target: "#submit".into(),
+            arguments: Value::Null,
+        };
+        let decision = engine.evaluate(&request).expect("evaluate");
+        assert!(!decision.allowed);
+    }
 }

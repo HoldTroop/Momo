@@ -10,11 +10,12 @@ export class TaskQueue {
     this.persistence = persistence;
   }
 
-  async enqueue(entry: Omit<TaskQueueEntry, 'id' | 'attempts' | 'status'>): Promise<string> {
+  async enqueue(sessionId: string, entry: Omit<TaskQueueEntry, 'id' | 'sessionId' | 'attempts' | 'status'>): Promise<string> {
     const id = `${entry.type}-${crypto.randomUUID()}`;
     const fullEntry: TaskQueueEntry = {
       ...entry,
       id,
+      sessionId,
       attempts: 0,
       status: 'pending',
     };
@@ -26,6 +27,9 @@ export class TaskQueue {
   async startProcessing(sessionId: string, processor: (entry: TaskQueueEntry) => Promise<void>) {
     if (this.processing) return;
     this.processing = true;
+
+    // Recover tasks stranded in `running` from a prior service-worker lifetime.
+    await this.persistence.requeueStaleRunningTasks(sessionId, Date.now() - 60_000);
 
     this.processorInterval = window.setInterval(async () => {
       try {

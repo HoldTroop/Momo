@@ -1,30 +1,4 @@
-// Type declarations for Chrome extension APIs
-declare namespace chrome {
-  namespace runtime {
-    interface MessageSender {
-      tab?: chrome.tabs.Tab;
-      frameId?: number;
-      id?: string;
-      url?: string;
-    }
-    const onMessage: {
-      addListener: (callback: (message: any, sender: MessageSender, sendResponse: (response: any) => void) => boolean | void) => void;
-    };
-    function sendMessage(message: any, callback: (response: any) => void): void;
-  }
-  namespace tabs {
-    interface Tab {
-      id?: number;
-      url?: string;
-      title?: string;
-      active?: boolean;
-    }
-    function sendMessage(tabId: number, message: any, callback: (response: any) => void): void;
-  }
-  namespace scripting {
-    function executeScript(options: any): Promise<any[]>;
-  }
-}
+// Chrome extension API types are provided by @types/chrome (see tsconfig `types`).
 
 interface AxNode {
   role: string;
@@ -149,7 +123,7 @@ class AxTreeExtractor {
             tree.push({
               role,
               name: el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.textContent?.trim().slice(0, 100) || '',
-              value: (el as HTMLInputElement).value || '',
+              value: isSensitive(el) ? '' : ((el as HTMLInputElement).value || ''),
               description: el.getAttribute('aria-description') || '',
               states: getStates(el),
               attributes: getAttributes(el),
@@ -160,6 +134,15 @@ class AxTreeExtractor {
                 top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left
               } : undefined,
             });
+          }
+
+          function isSensitive(el) {
+            const type = ((el as HTMLInputElement).type || '').toLowerCase();
+            if (type === 'password') return true;
+            const ac = ((el as HTMLInputElement).autocomplete || '').toLowerCase();
+            if (['cc-', 'cvc', 'cvv', 'card', 'account-number', 'one-time-code', 'otp', 'new-password', 'current-password'].some(t => ac.includes(t))) return true;
+            const id = (el.getAttribute('name') || '') + ' ' + (el.getAttribute('id') || '');
+            return /(password|passwd|pwd|secret|token|api[_-]?key|authorization|credential|credit|card|cvv|cvc|ssn|social)/i.test(id);
           }
 
           function getImplicitRole(el) {
@@ -190,6 +173,8 @@ class AxTreeExtractor {
           function getAttributes(el) {
             const attrs: Record<string, string> = {};
             for (const attr of el.attributes) {
+              // Never capture the live value of a secret field as an attribute.
+              if (isSensitive(el) && (attr.name === 'value' || attr.name === 'aria-valuetext')) continue;
               attrs[attr.name] = attr.value;
             }
             return attrs;
@@ -250,7 +235,7 @@ class AxTreeExtractor {
       (this as any).debounceTimer = setTimeout(() => {
         this.getAxTree().then(tree => {
           this.lastSnapshot = tree;
-          this.notifyCallbacks(tree);
+          if (tree) this.notifyCallbacks(tree);
         });
       }, 300);
     });

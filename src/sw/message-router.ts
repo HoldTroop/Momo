@@ -25,6 +25,15 @@ export class MessageRouter {
     this.handlers.set('CDP_ATTACH_REQUEST', this.handleCdpAttachRequest.bind(this));
     this.handlers.set('CDP_GET_TARGETS', this.handleCdpGetTargets.bind(this));
     this.handlers.set('CDP_DETACH', this.handleCdpDetach.bind(this));
+
+    // Offscreen → bridge proxy + offscreen event consumption (H8, H9, M5).
+    this.handlers.set('BRIDGE_REQUEST', this.handleBridgeRequest.bind(this));
+    this.handlers.set('LLM_COMPLETE', this.handleLlmComplete.bind(this));
+    this.handlers.set('LLM_RESPONSE', this.handleLlmResponse.bind(this));
+    this.handlers.set('LLM_STREAM_CHUNK', this.handleLlmStreamChunk.bind(this));
+    this.handlers.set('SIMULATION_COMPLETE', this.handleSimulationComplete.bind(this));
+    this.handlers.set('PERSIST_STATE', this.handlePersistState.bind(this));
+    this.handlers.set('OFFSCREEN_KILLED', this.handleOffscreenKilled.bind(this));
   }
 
   async handle(message: unknown, sender: chrome.runtime.MessageSender): Promise<unknown> {
@@ -50,7 +59,7 @@ export class MessageRouter {
   }
 
   private async handleStopTask() {
-    // The orchestrator will handle aborting
+    await this.orchestrator.abortTask('Stopped by user');
     return { success: true };
   }
 
@@ -98,13 +107,16 @@ export class MessageRouter {
   }
 
   private async handleGetSessions() {
-    // Get all sessions from persistence
-    return { sessions: [] };
+    const sessions = await this.orchestrator.listSessions();
+    return { sessions };
   }
 
   private async handleDeleteSession(payload: unknown) {
     const { sessionId } = payload as { sessionId: string };
-    // Delete session from persistence
+    if (!sessionId) {
+      return { success: false, error: 'Missing sessionId' };
+    }
+    await this.orchestrator.deleteSession(sessionId);
     return { success: true };
   }
 
@@ -152,5 +164,61 @@ export class MessageRouter {
     } catch (e) {
       return { error: String(e) };
     }
+  }
+
+  /** Proxy an LLM/offscreen request to the native bridge and unwrap its data. */
+  private async proxyToBridge(payload: unknown): Promise<unknown> {
+    try {
+      const response = await chrome.runtime.sendNativeMessage('agent.bridge', payload as object);
+      return response?.payload?.data ?? response?.payload ?? response;
+    } catch (e) {
+      return { error: String(e) };
+    }
+  }
+
+  private async handleBridgeRequest(payload: unknown) {
+    return this.proxyToBridge(payload);
+  }
+
+  private async handleLlmComplete(payload: unknown) {
+    return this.proxyToBridge(payload);
+  }
+
+  private async handleLlmResponse(payload: unknown) {
+    // Forward offscreen LLM result to extension pages (side panel).
+    this.forwardToUi('LLM_RESPONSE', payload);
+    return { success: true };
+  }
+
+  private async handleLlmStreamChunk(payload: unknown) {
+    this.forwardToUi('LLM_STREAM_CHUNK', payload);
+    return { success: true };
+  }
+
+  private async handleSimulationComplete(payload: unknown) {
+    this.forwardToUi('SIMULATION_COMPLETE', payload);
+    return { success: true };
+  }
+
+  private async handlePersistState() {
+    await this.orchestrator.persistState();
+    return { success: true };
+  }
+
+  private async handleOffscreenKilled() {
+    // Propagate the kill switch: cancel in-flight bridge/LLM work and abort the task.
+    try {
+      await chrome.runtime.sendNativeMessage('agent.bridge', { type: 'SHUTDOWN' });
+    } catch {
+      // Bridge may already be gone; best effort.
+    }
+    await this.orchestrator.abortTask('Offscreen kill switch activated');
+    return { success: true };
+  }
+
+  private forwardToUi(type: string, payload: unknown) {
+    chrome.runtime.sendMessage({ type, payload }).catch(() => {
+      // No receiver is fine — the offscreen events are advisory.
+    });
   }
 }

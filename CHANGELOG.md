@@ -17,7 +17,68 @@ Category mapping to Conventional Commit types:
 
 ## [Unreleased]
 
-_No unreleased changes yet._
+Security remediation of the external audit (`audit-report.md`, audited revision
+`bb99b6af`). Fixes 2 critical, 6 high, 4 medium, and 4 low findings, plus two
+additional Rust build blockers the audit missed. `chrome.debugger` is now the
+sole input path; the Rust bridge is the authoritative policy boundary.
+
+### 🔒 Security
+
+- **C1 — Enforce policy on trusted input.** `human_click` / `human_type` /
+  `human_scroll` / `human_mouse_move` now authorize through the bridge's
+  `SIMULATE_*` endpoint (`policy_engine.evaluate`) before executing, and only
+  execute the returned action via `chrome.debugger` on `allowed`. The extension
+  no longer self-authorizes.
+- **C2 — Redact secrets at the source.** Added `src/lib/redaction.ts`
+  (`isSensitiveInput`, `redactText`, `redactInputValue`); applied in
+  `ax-extractor.ts`, `dom-compressor.ts`, `persistence.ts`, and `llm-client.ts`
+  so passwords, tokens, card numbers, and PII never reach DOM snapshots,
+  persisted state, or the LLM.
+- **H7 — Fail-closed, look-alike-safe allowlist.** `policy.rs` now uses
+  exact-or-subdomain-bounded matching (`host == domain || host.endsWith("." + domain)`);
+  an empty allowlist denies all. Closes the `evil-example.com` suffix bypass and
+  the empty-allowlist-allow-all default.
+- **M3 — Remove `eval` verification.** Replaced the `eval`-based custom
+  verification with structured, non-`eval` checks (no arbitrary JS execution).
+- **M4 — Stop leaking typed text.** `human_type` no longer returns typed text in
+  its summary; sensitive values are redacted before entering `state.history`.
+
+### 🐛 Fixes
+
+- **H1 — Native-message type casing.** Added
+  `#[serde(rename_all = "SCREAMING_SNAKE_CASE")]` to `BridgeRequest`; aligned
+  remaining message strings between the extension and the bridge.
+- **H2 — Bridge build blocker.** Removed the unused, unavailable `llama-cpp-2`
+  dependency (LLM goes through `reqwest`); the bridge now compiles.
+- **H3/H4/H5 — Removed dead CDP layer.** Deleted `cdp.rs` and `simulation.rs`
+  (raw-WebSocket CDP, private `CdpManager`, undeliverable responses, discarded
+  command errors); `chrome.debugger` is the sole input path.
+- **H6 — All-frame duplication.** CDP input/extract now target the active tab's
+  `tabId` with `allFrames: false` instead of fanning out to every frame.
+- **H8 — Kill switch propagates.** `OFFSCREEN_KILLED` now sends `SHUTDOWN` to the
+  bridge and aborts the running task.
+- **H9 — Offscreen LLM fallback wired.** `llm-worker.ts` routes through the
+  service worker (`BRIDGE_REQUEST`) instead of a broken `MessageChannel` port
+  handshake.
+- **M1 — Real session identity.** Tasks now carry an explicit `sessionId` field
+  instead of deriving it from the task-id string.
+- **M2 — Stale-task recovery.** `task-queue.ts` requeues stranded
+  `running`/`pending` tasks on init.
+- **M5 — Offscreen events consumed.** Registered handlers for `LLM_RESPONSE`,
+  `LLM_STREAM_CHUNK`, `SIMULATION_COMPLETE`, `PERSIST_STATE`, and `OFFSCREEN_KILLED`.
+- **M6 — CDP listener leak.** `cdp-adapter.ts` `detach()` removes the
+  `onEvent`/`onDetach` listeners added in `attach()`.
+- **L1/L2 — Real session management.** `GET_SESSIONS` returns actual sessions;
+  `DELETE_SESSION` deletes them.
+- **L3 — STOP_TASK aborts.** `handleStopTask` now calls `orchestrator.abortTask()`.
+
+### 🧰 Chore / Internal
+
+- **L4 — Tooling.** Added ESLint (flat config) to devDeps; drove
+  `npx tsc --noEmit` and `npm run lint` to clean; pinned `tsconfig.json` to
+  ES2023 with `skipLibCheck`.
+- **Tests.** Added unit tests for policy allowlist matching (Rust) and redaction
+  (TypeScript); `cargo test` and `npm run test` now run 4 and 12 tests.
 
 ---
 

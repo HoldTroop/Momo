@@ -23,7 +23,6 @@ let isWebllmLoaded = false;
 // Vite won't statically analyze this dynamic import with computed string
 async function loadWebllmModule(): Promise<any> {
   const moduleName = '@mlc-ai/web-llm';
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
   const mod = await import(moduleName);
   return mod;
 }
@@ -63,21 +62,12 @@ async function completeWithWebllm(messages: any[], tools: any[]) {
 }
 
 async function completeViaBridge(payload: any) {
-  // Proxy to bridge via service worker
-  return new Promise((resolve, reject) => {
-    const channel = new MessageChannel();
-    channel.port1.onmessage = (e) => {
-      if (e.data.type === 'BRIDGE_RESPONSE') {
-        if (e.data.error) reject(new Error(e.data.error));
-        else resolve(e.data.payload);
-      }
-    };
-
-    chrome.runtime.sendMessage({
-      type: 'BRIDGE_REQUEST',
-      payload,
-    }, [channel.port2]);
-  });
+  // Proxy to the bridge via the service worker (handled as BRIDGE_REQUEST).
+  // `sendMessage` resolves with the bridge's response; the service worker's
+  // onMessage listener keeps the channel open for the async native call.
+  const response = await chrome.runtime.sendMessage({ type: 'BRIDGE_REQUEST', payload });
+  if (response?.error) throw new Error(response.error);
+  return response;
 }
 
 self.onmessage = async (e: MessageEvent<WorkerMessage>) => {

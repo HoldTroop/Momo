@@ -1,4 +1,5 @@
 import { AgentState, Plan, PlanStep, ToolCall, CompressedDom, VerificationRule, FailureAction } from '../sw/orchestrator.js';
+import { redactText } from './redaction.js';
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -59,20 +60,6 @@ export class LlmClient {
   private providers: Map<ProviderType, ProviderConfig> = new Map();
   private activeProvider: ProviderType = 'ollama';
   private activeModel: string = 'llama3.2:3b';
-  private redactionPatterns: RegExp[] = [
-    /\b(?:\d[ -]*?){13,16}\b/g, // Credit card numbers
-    /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g, // Emails
-    /\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g, // Phone numbers
-    /\b\d{3}-\d{2}-\d{4}\b/g, // SSN
-    /password\s*[:=]\s*\S+/gi, // password: value
-    /api[_-]?key\s*[:=]\s*\S+/gi, // api_key: value
-    /secret\s*[:=]\s*\S+/gi, // secret: value
-    /token\s*[:=]\s*\S+/gi, // token: value
-    /authorization\s*[:=]\s*\S+/gi, // authorization: value
-    /bearer\s+\S+/gi, // bearer token
-    /sk-[a-zA-Z0-9]{32,}/g, // OpenAI API keys
-    /xoxb-[a-zA-Z0-9-]+/g, // Slack bot tokens
-  ];
 
   constructor() {
     this.providers.set('ollama', PROVIDERS.ollama);
@@ -135,7 +122,7 @@ export class LlmClient {
       { role: 'user', content: userPrompt },
     ], this.getToolSchemas(), false);
 
-    return this.parsePlan(this.redact(response.content), goal);
+    return this.parsePlan(redactText(response.content), goal);
   }
 
   async executeStep(step: PlanStep, dom: CompressedDom, variables: Record<string, unknown>, history: any[]): Promise<ToolCall | null> {
@@ -148,7 +135,7 @@ export class LlmClient {
       { role: 'user', content: userPrompt },
     ], this.getToolSchemas(), false);
 
-    const toolCall = this.parseToolCall(this.redact(response.content));
+    const toolCall = this.parseToolCall(redactText(response.content));
     if (toolCall) {
       // Validate tool call against schema
       if (!this.validateToolCall(toolCall)) {
@@ -182,7 +169,7 @@ export class LlmClient {
     // Redact messages before sending to LLM
     const redactedMessages = messages.map(m => ({
       ...m,
-      content: this.redact(m.content),
+      content: redactText(m.content),
     }));
 
     let url: string;
@@ -272,14 +259,6 @@ export class LlmClient {
     }));
   }
 
-  private redact(text: string): string {
-    let result = text;
-    for (const pattern of this.redactionPatterns) {
-      result = result.replace(pattern, '[REDACTED]');
-    }
-    return result;
-  }
-
   private buildSystemPrompt(): string {
     return `You are an autonomous browser agent operating under strict policy constraints. Your job is to break down high-level goals into a sequence of precise browser actions.
 
@@ -340,13 +319,13 @@ Create a step-by-step plan to achieve the goal. Only use allowed origins.`;
   private redactDom(dom: CompressedDom): CompressedDom {
     return {
       ...dom,
-      url: this.redact(dom.url),
-      title: this.redact(dom.title),
-      summary: this.redact(dom.summary),
+      url: redactText(dom.url),
+      title: redactText(dom.title),
+      summary: redactText(dom.summary),
       actions: dom.actions.map(a => ({
         ...a,
-        label: this.redact(a.label),
-        selector: this.redact(a.selector),
+        label: redactText(a.label),
+        selector: redactText(a.selector),
       })),
     };
   }
@@ -354,7 +333,7 @@ Create a step-by-step plan to achieve the goal. Only use allowed origins.`;
   private buildStepPrompt(step: PlanStep, dom: CompressedDom, variables: Record<string, unknown>, history: any[]): string {
     const redactedDom = this.redactDom(dom);
     const recentHistory = history.slice(-3).map(h =>
-      `Step ${h.stepId}: ${h.action.name} -> ${h.result.success ? 'OK' : 'FAILED'} (${this.redact(h.result.summary)})`
+      `Step ${h.stepId}: ${h.action.name} -> ${h.result.success ? 'OK' : 'FAILED'} (${redactText(h.result.summary)})`
     ).join('\n');
 
     return `Current Step: ${step.id}

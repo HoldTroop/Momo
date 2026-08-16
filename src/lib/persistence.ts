@@ -1,5 +1,6 @@
 import { AgentState, Checkpoint, WalEntry, WalOperation, TaskQueueEntry, TaskStatus } from '../sw/orchestrator.js';
 import SuperJSON from 'superjson';
+import { redactText } from './redaction.js';
 
 declare global {
   interface Window {
@@ -84,7 +85,7 @@ class PersistenceManager {
 
     const record: SessionRecord = {
       sessionId,
-      state: this.serializeState(state),
+      state: this.serializeState(this.redactStateForPersistence(state)),
       updatedAt: Date.now(),
     };
 
@@ -119,7 +120,7 @@ class PersistenceManager {
   async appendWal(sessionId: string, entry: Omit<WalEntry, 'id'>): Promise<number> {
     if (!this.initialized) await this.init();
 
-    const record: WalRecord = {
+    const record: Omit<WalRecord, 'id'> = {
       sessionId,
       timestamp: entry.timestamp,
       operation: entry.operation,
@@ -187,7 +188,7 @@ class PersistenceManager {
 
     const record: TaskRecord = {
       id: entry.id,
-      sessionId: entry.id.split('-')[0], // extract session from task ID
+      sessionId: entry.sessionId,
       type: entry.type,
       payload: entry.payload,
       priority: entry.priority,
@@ -231,10 +232,22 @@ class PersistenceManager {
     return records.map((r: TaskRecord) => this.deserializeTask(r));
   }
 
+  /** Requeue tasks stranded in `running` from a previous lifetime back to `pending`. */
+  async requeueStaleRunningTasks(sessionId: string, staleBeforeMs: number): Promise<number> {
+    if (!this.initialized) await this.init();
+
+    return this.db.tasks
+      .where('sessionId').equals(sessionId)
+      .filter((r: TaskRecord) => r.status === 'running' && r.updatedAt < staleBeforeMs)
+      .modify((r: TaskRecord) => {
+        r.status = 'pending';
+      });
+  }
+
   async saveDomCache(url: string, compressedDom: any): Promise<void> {
     if (!this.initialized) await this.init();
 
-    await this.db.domCache.put({ url, data: compressedDom, timestamp: Date.now() });
+    await this.db.domCache.put({ url, data: this.redactCompressedDom(compressedDom), timestamp: Date.now() });
   }
 
   async getDomCache(url: string): Promise<any | null> {
@@ -256,6 +269,34 @@ class PersistenceManager {
     }
   }
 
+  private redactCompressedDom(dom: any): any {
+    if (!dom) return dom;
+    return {
+      ...dom,
+      title: redactText(dom.title ?? ''),
+      summary: redactText(dom.summary ?? ''),
+      actions: Array.isArray(dom.actions)
+        ? dom.actions.map((a: any) => ({ ...a, label: redactText(a.label ?? '') }))
+        : dom.actions,
+    };
+  }
+
+  private redactStateForPersistence(state: AgentState): AgentState {
+    return {
+      ...state,
+      domCache: new Map(
+        Array.from(state.domCache.entries()).map(([url, dom]) => [url, this.redactCompressedDom(dom)])
+      ),
+      history: state.history.map(step => ({
+        ...step,
+        result: {
+          ...step.result,
+          summary: redactText(step.result.summary ?? ''),
+        },
+      })),
+    };
+  }
+
   private serializeState(state: AgentState): any {
     return SuperJSON.serialize({
       ...state,
@@ -264,7 +305,7 @@ class PersistenceManager {
   }
 
   private deserializeState(data: any): AgentState {
-    const deserialized = SuperJSON.deserialize(data);
+    const deserialized = SuperJSON.deserialize(data) as any;
     return {
       ...deserialized,
       domCache: new Map(deserialized.domCache || []),
@@ -274,6 +315,7 @@ class PersistenceManager {
   private deserializeTask(record: TaskRecord): TaskQueueEntry {
     return {
       id: record.id,
+      sessionId: record.sessionId,
       type: record.type as any,
       payload: record.payload,
       priority: record.priority,

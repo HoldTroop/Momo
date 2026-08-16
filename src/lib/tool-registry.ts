@@ -1,4 +1,5 @@
 import { ToolCall, ToolResult, CompressedDom } from '../sw/orchestrator.js';
+import { cdpAdapter } from '../sw/cdp-adapter.js';
 
 export type RiskClass = 'read' | 'write' | 'navigation' | 'payment' | 'auth' | 'dangerous';
 
@@ -19,6 +20,9 @@ export interface ToolContext {
   allowlist: string[];
   tokenBudget: { max: number; used: number };
   pageRevision: number;
+  sessionId: string;
+  tabId: number;
+  getCdpSession: () => Promise<string | null>;
 }
 
 export type ToolExecutor = (args: Record<string, unknown>, context: ToolContext) => Promise<ToolResult>;
@@ -31,18 +35,31 @@ export interface ToolDefinition {
   execute: ToolExecutor;
 }
 
-function assertAllowlisted(url: string, allowlist: string[]): void {
-  if (allowlist.length === 0) return; // No allowlist = all allowed (legacy)
-  const origin = new URL(url).origin;
-  const allowed = allowlist.some(allowed => {
-    if (allowed.startsWith('*.')) {
-      const domain = allowed.slice(2);
-      return origin.endsWith(domain);
-    }
-    return origin === allowed;
-  });
-  if (!allowed) {
-    throw new Error(`Navigation blocked: ${origin} not on allowlist`);
+/** Bridge policy decision, mirroring the Rust `PolicyDecision` serialization. */
+interface PolicyDecision {
+  allowed: boolean;
+  requires_confirmation: boolean;
+  reason: string | null;
+  risk_class: string;
+  confirmation_data: { origin: string; action: string; target: string; data: unknown; reversible: boolean; risk_class: string } | null;
+}
+
+/** Send an authorization request to the bridge and return its policy decision (null if unreachable). */
+async function authorizeViaBridge(request: Record<string, unknown>): Promise<PolicyDecision | null> {
+  try {
+    const response = await chrome.runtime.sendNativeMessage('agent.bridge', request);
+    return (response?.payload?.data as PolicyDecision) ?? null;
+  } catch (e) {
+    console.warn('[ToolRegistry] Bridge authorize failed:', e);
+    return null;
+  }
+}
+
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return '';
   }
 }
 
@@ -84,11 +101,32 @@ export class ToolRegistry {
         tokenCost: 100,
       },
       execute: async (args, context) => {
-        assertAllowlisted(args.url as string, context.allowlist);
-        deductTokens(context.tokenBudget, context.step.idempotencyKey ? 0 : 100); // no cost on retry
+        deductTokens(context.tokenBudget, 100);
 
         const url = args.url as string;
         const waitUntil = args.waitUntil as string || 'networkidle';
+
+        // The bridge is the authoritative policy boundary for navigation.
+        const decision = await authorizeViaBridge({
+          type: 'POLICY_CHECK',
+          payload: {
+            session_id: context.sessionId,
+            action: 'navigate',
+            origin: originOf(context.dom.url),
+            target: url,
+            arguments: { url },
+          },
+        });
+
+        if (!decision || !decision.allowed) {
+          return {
+            success: false,
+            error: decision?.reason || 'Bridge unreachable',
+            summary: `Navigation blocked: ${decision?.reason || 'bridge unreachable'}`,
+            navigationOccurred: false,
+            requiresConfirmation: decision?.requires_confirmation,
+          };
+        }
 
         await chrome.tabs.update({ url });
 
@@ -127,14 +165,14 @@ export class ToolRegistry {
         tokenCost: 10,
       },
       execute: async (args, context) => {
-        deductTokens(context.tokenBudget, context.step.idempotencyKey ? 0 : 10);
+        deductTokens(context.tokenBudget, 10);
 
         const selector = args.selector as string;
 
         const result = await chrome.scripting.executeScript({
-          target: { allFrames: true },
-          func: (sel) => {
-            const el = document.querySelector(sel);
+          target: { tabId: context.tabId, allFrames: false },
+          func: (sel: string) => {
+            const el = document.querySelector(sel) as HTMLElement | null;
             if (!el) return { success: false, error: 'Element not found' };
             if (!el.checkVisibility()) return { success: false, error: 'Element not visible' };
 
@@ -189,7 +227,7 @@ export class ToolRegistry {
         tokenCost: 5,
       },
       execute: async (args, context) => {
-        deductTokens(context.tokenBudget, context.step.idempotencyKey ? 0 : 5);
+        deductTokens(context.tokenBudget, 5);
 
         const selector = args.selector as string;
         const text = args.text as string;
@@ -198,8 +236,8 @@ export class ToolRegistry {
 
         // Check if target is a sensitive field (password, credit card, etc.)
         const sensitiveCheck = await chrome.scripting.executeScript({
-          target: { allFrames: true },
-          func: (sel) => {
+          target: { tabId: context.tabId, allFrames: false },
+          func: (sel: string) => {
             const el = document.querySelector(sel) as HTMLInputElement | HTMLTextAreaElement | null;
             if (!el) return { isSensitive: false };
             const type = (el.type || '').toLowerCase();
@@ -233,8 +271,8 @@ export class ToolRegistry {
         }
 
         const result = await chrome.scripting.executeScript({
-          target: { allFrames: true },
-          func: (sel, txt, clear, enter) => {
+          target: { tabId: context.tabId, allFrames: false },
+          func: (sel: string, txt: string, clear: boolean, enter: boolean) => {
             const el = document.querySelector(sel) as HTMLInputElement | HTMLTextAreaElement | null;
             if (!el) return { success: false, error: 'Element not found' };
             if (!el.checkVisibility()) return { success: false, error: 'Element not visible' };
@@ -249,7 +287,9 @@ export class ToolRegistry {
               el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
             }
 
-            return { success: true, value: el.value };
+            // Do not return the field value: it may contain the just-typed secret
+            // and would flow into history/persistence.
+            return { success: true };
           },
           args: [selector, text, clearFirst, pressEnter],
         });
@@ -291,15 +331,15 @@ export class ToolRegistry {
         tokenCost: 1,
       },
       execute: async (args, context) => {
-        deductTokens(context.tokenBudget, context.step.idempotencyKey ? 0 : 1);
+        deductTokens(context.tokenBudget, 1);
 
         const selector = args.selector as string | undefined;
         const direction = args.direction as string;
         const amount = args.amount as number | undefined;
 
         const result = await chrome.scripting.executeScript({
-          target: { allFrames: true },
-          func: (sel, dir, amt) => {
+          target: { tabId: context.tabId, allFrames: false },
+          func: (sel: string | undefined, dir: string, amt: number | undefined) => {
             const target = sel ? document.querySelector(sel) : window;
             if (!target) return { success: false, error: 'Target not found' };
 
@@ -358,27 +398,27 @@ export class ToolRegistry {
         tokenCost: 20,
       },
       execute: async (args, context) => {
-        deductTokens(context.tokenBudget, context.step.idempotencyKey ? 0 : 20);
+        deductTokens(context.tokenBudget, 20);
 
         const selector = args.selector as string;
-        const schema = args.schema as Record<string, unknown>;
+        const schema = args.schema as Record<string, { selector?: string; attribute?: string; text?: boolean }>;
         const multiple = args.multiple as boolean ?? false;
 
         const result = await chrome.scripting.executeScript({
-          target: { allFrames: true },
-          func: (sel, sch, multi) => {
-            const elements = multi
+          target: { tabId: context.tabId, allFrames: false },
+          func: (sel: string, sch: Record<string, { selector?: string; attribute?: string; text?: boolean }>, multi: boolean) => {
+            const elements = (multi
               ? Array.from(document.querySelectorAll(sel))
-              : [document.querySelector(sel)].filter(Boolean);
+              : [document.querySelector(sel)].filter(Boolean)) as Element[];
 
             return elements.map(el => {
               const data: Record<string, unknown> = {};
-              for (const [key, spec] of Object.entries(sch as Record<string, { selector?: string; attribute?: string; text?: boolean }>)) {
+              for (const [key, spec] of Object.entries(sch)) {
                 if (spec.selector) {
                   const child = el.querySelector(spec.selector);
                   data[key] = spec.attribute ? child?.getAttribute(spec.attribute) : child?.textContent?.trim();
                 } else if (spec.attribute) {
-                  data[key] = (el as Element).getAttribute(spec.attribute);
+                  data[key] = el.getAttribute(spec.attribute);
                 } else if (spec.text) {
                   data[key] = el.textContent?.trim();
                 }
@@ -423,7 +463,7 @@ export class ToolRegistry {
         tokenCost: 5,
       },
       execute: async (args, context) => {
-        deductTokens(context.tokenBudget, context.step.idempotencyKey ? 0 : 5);
+        deductTokens(context.tokenBudget, 5);
 
         const selector = args.selector as string;
         const condition = args.condition as string || 'visible';
@@ -432,8 +472,8 @@ export class ToolRegistry {
         const startTime = Date.now();
         while (Date.now() - startTime < timeout) {
           const result = await chrome.scripting.executeScript({
-            target: { allFrames: true },
-            func: (sel, cond) => {
+            target: { tabId: context.tabId, allFrames: false },
+            func: (sel: string, cond: string) => {
               const el = document.querySelector(sel);
               if (!el) return false;
 
@@ -479,7 +519,7 @@ export class ToolRegistry {
         tokenCost: 50,
       },
       execute: async (args, context) => {
-        deductTokens(context.tokenBudget, context.step.idempotencyKey ? 0 : 50);
+        deductTokens(context.tokenBudget, 50);
         return {
           success: true,
           data: context.dom,
@@ -511,16 +551,49 @@ export class ToolRegistry {
         tokenCost: 10,
       },
       execute: async (args, context) => {
-        deductTokens(context.tokenBudget, context.step.idempotencyKey ? 0 : 10);
+        deductTokens(context.tokenBudget, 10);
 
         const x = args.x as number;
         const y = args.y as number;
+        const origin = originOf(context.dom.url);
+        const target = `coords(${x},${y})`;
+
+        // The bridge is the authoritative policy gate: never dispatch a trusted
+        // input without an explicit `allowed` decision.
+        const decision = await authorizeViaBridge({
+          type: 'SIMULATE_CLICK',
+          payload: { session_id: context.sessionId, origin, target, x, y },
+        });
+
+        if (!decision || !decision.allowed) {
+          return {
+            success: false,
+            error: decision?.reason || 'Bridge unreachable',
+            summary: `Human click blocked: ${decision?.reason || 'bridge unreachable'}`,
+            navigationOccurred: false,
+            requiresConfirmation: decision?.requires_confirmation,
+          };
+        }
+
+        if (decision.requires_confirmation) {
+          return {
+            success: false,
+            error: 'Requires confirmation',
+            summary: 'Human click requires confirmation',
+            navigationOccurred: false,
+            requiresConfirmation: true,
+            confirmationData: { origin, action: 'human_click', target, data: { x, y }, reversible: false, riskClass: decision.risk_class },
+          };
+        }
+
+        const sessionId = await context.getCdpSession();
+        if (!sessionId) {
+          return { success: false, error: 'CDP session unavailable', summary: 'Human click failed: no CDP session', navigationOccurred: false };
+        }
 
         try {
-          await chrome.runtime.sendNativeMessage('agent.bridge', {
-            type: 'SIMULATE_CLICK',
-            payload: { x, y, profile: { speed: 1.0, jitter: 0.1, error_rate: 0.02 } },
-          });
+          await cdpAdapter.dispatchMouseEvent(sessionId, 'mousePressed', x, y);
+          await cdpAdapter.dispatchMouseEvent(sessionId, 'mouseReleased', x, y);
           return { success: true, summary: `Human click at (${x}, ${y})`, navigationOccurred: false };
         } catch (e) {
           return { success: false, error: String(e), summary: 'Human click failed', navigationOccurred: false };
@@ -549,16 +622,47 @@ export class ToolRegistry {
         tokenCost: 5,
       },
       execute: async (args, context) => {
-        deductTokens(context.tokenBudget, context.step.idempotencyKey ? 0 : 5);
+        deductTokens(context.tokenBudget, 5);
 
         const text = args.text as string;
+        const origin = originOf(context.dom.url);
+        const target = 'focused-element';
+
+        const decision = await authorizeViaBridge({
+          type: 'SIMULATE_TYPE',
+          payload: { session_id: context.sessionId, origin, target, selector: null, text },
+        });
+
+        if (!decision || !decision.allowed) {
+          return {
+            success: false,
+            error: decision?.reason || 'Bridge unreachable',
+            summary: `Human type blocked: ${decision?.reason || 'bridge unreachable'}`,
+            navigationOccurred: false,
+            requiresConfirmation: decision?.requires_confirmation,
+          };
+        }
+
+        if (decision.requires_confirmation) {
+          return {
+            success: false,
+            error: 'Requires confirmation',
+            summary: 'Human type requires confirmation',
+            navigationOccurred: false,
+            requiresConfirmation: true,
+            confirmationData: { origin, action: 'human_type', target, data: { text: '[REDACTED]' }, reversible: false, riskClass: decision.risk_class },
+          };
+        }
+
+        const sessionId = await context.getCdpSession();
+        if (!sessionId) {
+          return { success: false, error: 'CDP session unavailable', summary: 'Human type failed: no CDP session', navigationOccurred: false };
+        }
 
         try {
-          await chrome.runtime.sendNativeMessage('agent.bridge', {
-            type: 'SIMULATE_TYPE',
-            payload: { text, profile: { speed: 1.0, jitter: 0.1, error_rate: 0.02 } },
-          });
-          return { success: true, summary: `Human typed: ${text.slice(0, 50)}`, navigationOccurred: false };
+          await cdpAdapter.insertText(sessionId, text);
+          // Never echo the typed text into the summary (it flows into history/persistence).
+          return { success: true, summary: 'Human typed into focused element', navigationOccurred: false };
         } catch (e) {
           return { success: false, error: String(e), summary: 'Human type failed', navigationOccurred: false };
         }

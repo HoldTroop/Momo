@@ -1,5 +1,5 @@
 import { PersistenceManager } from '../lib/persistence.js';
-import { ToolRegistry } from '../lib/tool-registry.js';
+import { ToolRegistry, ToolContext } from '../lib/tool-registry.js';
 import { DomCompressor } from '../lib/dom-compressor.js';
 import { LlmClient } from '../lib/llm-client.js';
 import { TaskQueue } from '../lib/task-queue.js';
@@ -54,8 +54,7 @@ export type VerificationRule =
   | { type: 'elementVisible'; selector: string }
   | { type: 'elementHidden'; selector: string }
   | { type: 'textContains'; selector: string; text: string }
-  | { type: 'urlMatches'; pattern: string }
-  | { type: 'custom'; expression: string };
+  | { type: 'urlMatches'; pattern: string };
 
 export type FailureAction = 'retry' | { type: 'fallback'; stepId: string } | 'escalate' | 'abort';
 
@@ -147,6 +146,7 @@ export class AgentOrchestrator {
   private activeSessionId: string | null = null;
   private isRunning = false;
   private abortController: AbortController | null = null;
+  private cdpSessionId: string | null = null;
 
   constructor(persistence: PersistenceManager) {
     this.persistence = persistence;
@@ -167,9 +167,10 @@ export class AgentOrchestrator {
 
   private async loadLatestSession() {
     const sessions = await this.persistence.getAllSessions();
-    if (sessions.length > 0) {
-      this.state = sessions[0];
-      this.activeSessionId = this.state.sessionId;
+    const latest = sessions[0];
+    if (latest) {
+      this.state = latest;
+      this.activeSessionId = latest.sessionId;
       console.log('[Orchestrator] Resumed session:', this.activeSessionId);
     }
   }
@@ -241,6 +242,10 @@ export class AgentOrchestrator {
       }
 
       const step = this.state.plan.steps[this.state.currentStep];
+      if (!step) {
+        await this.completeTask();
+        break;
+      }
       const startTime = Date.now();
       const idempotencyKey = crypto.randomUUID();
 
@@ -289,10 +294,20 @@ export class AgentOrchestrator {
     }
 
     const domSnapshot = await this.captureDomSnapshot();
-    const context = {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tabId = tabs[0]?.id;
+    if (!tabId) throw new Error('No active tab');
+
+    const context: ToolContext = {
       dom: domSnapshot,
       variables: this.state!.variables,
       step: step.action,
+      allowlist: this.state!.allowlist,
+      tokenBudget: this.state!.tokenBudget,
+      pageRevision: this.state!.pageRevision,
+      sessionId: this.activeSessionId!,
+      tabId,
+      getCdpSession: () => this.getOrCreateCdpSession(),
     };
 
     const result = await tool.execute(step.action.arguments, context);
@@ -305,7 +320,19 @@ export class AgentOrchestrator {
     return result;
   }
 
+  /** Attach (once) to the active tab via chrome.debugger and reuse the session. */
+  async getOrCreateCdpSession(): Promise<string | null> {
+    if (this.cdpSessionId) return this.cdpSessionId;
+    this.cdpSessionId = await this.attachCdpToActiveTab();
+    return this.cdpSessionId;
+  }
+
   private async requestConfirmation(step: PlanStep, result: ToolResult, idempotencyKey: string): Promise<ToolResult> {
+    const confirmationData = result.confirmationData;
+    if (!confirmationData) {
+      throw new Error('Confirmation requested without confirmation data');
+    }
+
     return new Promise((resolve, reject) => {
       if (!this.state) {
         reject(new Error('No active state'));
@@ -337,10 +364,10 @@ export class AgentOrchestrator {
           stepId: step.id,
           origin: this.getCurrentOrigin(),
           action: step.action.name,
-          target: result.confirmationData.target,
+          target: confirmationData.target,
           data: step.action.arguments,
-          reversible: result.confirmationData.reversible,
-          riskClass: result.confirmationData.riskClass,
+          reversible: confirmationData.reversible,
+          riskClass: confirmationData.riskClass,
           actionHash,
           pageRevision: this.state.pageRevision,
         },
@@ -391,16 +418,21 @@ export class AgentOrchestrator {
         return await this.checkTextContains(step.verification.selector, step.verification.text);
       case 'urlMatches':
         return await this.checkUrlMatches(step.verification.pattern);
-      case 'custom':
-        return await this.evalCustomVerification(step.verification.expression);
+      default:
+        // Unknown verification types (e.g. an LLM-emitted `custom` expression) are
+        // deliberately rejected rather than evaluated — no arbitrary JS execution.
+        console.warn('[Orchestrator] Unsupported verification type:', (step.verification as any).type);
+        return false;
     }
   }
 
   private async checkElementVisible(selector: string): Promise<boolean> {
     try {
+      const tabId = await this.getActiveTabId();
+      if (!tabId) return false;
       const result = await chrome.scripting.executeScript({
-        target: { allFrames: true },
-        func: (sel) => !!document.querySelector(sel)?.checkVisibility(),
+        target: { tabId, allFrames: false },
+        func: (sel: string) => !!document.querySelector(sel)?.checkVisibility(),
         args: [selector],
       });
       return result[0]?.result === true;
@@ -411,9 +443,11 @@ export class AgentOrchestrator {
 
   private async checkElementHidden(selector: string): Promise<boolean> {
     try {
+      const tabId = await this.getActiveTabId();
+      if (!tabId) return false;
       const result = await chrome.scripting.executeScript({
-        target: { allFrames: true },
-        func: (sel) => !document.querySelector(sel)?.checkVisibility(),
+        target: { tabId, allFrames: false },
+        func: (sel: string) => !document.querySelector(sel)?.checkVisibility(),
         args: [selector],
       });
       return result[0]?.result === true;
@@ -424,9 +458,11 @@ export class AgentOrchestrator {
 
   private async checkTextContains(selector: string, text: string): Promise<boolean> {
     try {
+      const tabId = await this.getActiveTabId();
+      if (!tabId) return false;
       const result = await chrome.scripting.executeScript({
-        target: { allFrames: true },
-        func: (sel, txt) => document.querySelector(sel)?.textContent?.includes(txt) ?? false,
+        target: { tabId, allFrames: false },
+        func: (sel: string, txt: string) => document.querySelector(sel)?.textContent?.includes(txt) ?? false,
         args: [selector, text],
       });
       return result[0]?.result === true;
@@ -435,36 +471,29 @@ export class AgentOrchestrator {
     }
   }
 
+  private async getActiveTabId(): Promise<number | null> {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    return tabs[0]?.id ?? null;
+  }
+
   private async checkUrlMatches(pattern: string): Promise<boolean> {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     return tabs.some(tab => new RegExp(pattern).test(tab.url || ''));
   }
 
-  private async evalCustomVerification(expression: string): Promise<boolean> {
-    try {
-      const result = await chrome.scripting.executeScript({
-        target: { allFrames: true },
-        func: (expr) => eval(expr),
-        args: [expression],
-      });
-      return result[0]?.result === true;
-    } catch {
-      return false;
-    }
-  }
-
   private async handleStepFailure(step: PlanStep, result: ToolResult, idempotencyKey: string) {
+    if (typeof step.onFailure === 'object' && step.onFailure.type === 'fallback') {
+      const fallbackStepId = step.onFailure.stepId;
+      const fallbackSteps = this.state?.plan?.contingencies.get(fallbackStepId);
+      if (fallbackSteps && this.state?.plan) {
+        this.state.plan.steps.splice(this.state.currentStep, 1, ...fallbackSteps);
+      }
+      return;
+    }
+
     switch (step.onFailure) {
       case 'retry':
         // Retry same step (will loop) - idempotency key prevents duplicate execution
-        break;
-      case 'fallback':
-        if (typeof step.onFailure === 'object' && step.onFailure.type === 'fallback') {
-          const fallbackStepId = step.onFailure.stepId;
-          if (this.state?.plan?.contingencies[fallbackStepId]) {
-            this.state.plan.steps.splice(this.state.currentStep, 1, ...this.state.plan.contingencies[fallbackStepId]);
-          }
-        }
         break;
       case 'escalate':
         await this.escalateToHuman(step, result);
@@ -490,10 +519,28 @@ export class AgentOrchestrator {
     this.abortController?.abort();
   }
 
-  private async abortTask(reason: string) {
+  async abortTask(reason: string) {
     this.isRunning = false;
+    this.abortController?.abort();
     await this.persistState();
     chrome.runtime.sendMessage({ type: 'TASK_ABORTED', payload: { reason } });
+  }
+
+  /** List persisted sessions (id + goal) for the side panel. */
+  async listSessions(): Promise<{ sessionId: string; goal: string }[]> {
+    const sessions = await this.persistence.getAllSessions();
+    return sessions.map(s => ({ sessionId: s.sessionId, goal: s.goal }));
+  }
+
+  /** Delete a persisted session and clear it from memory if it is active. */
+  async deleteSession(sessionId: string): Promise<void> {
+    await this.persistence.deleteSession(sessionId);
+    if (this.activeSessionId === sessionId) {
+      this.activeSessionId = null;
+      this.state = null;
+      this.isRunning = false;
+      this.abortController?.abort();
+    }
   }
 
   private async completeTask() {
@@ -506,11 +553,11 @@ export class AgentOrchestrator {
   async captureDomSnapshot(): Promise<CompressedDom> {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const tab = tabs[0];
-    if (!tab.id) throw new Error('No active tab');
+    if (!tab?.id) throw new Error('No active tab');
 
     // Check if we have a cached AX tree from content script
     const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id, allFrames: true },
+      target: { tabId: tab.id, allFrames: false },
       func: () => {
         return (window as any).__axTreeSnapshot || null;
       },
@@ -693,8 +740,24 @@ export interface RetryPolicy {
 
 export type TaskStatus = 'pending' | 'running' | 'done' | 'dead';
 
+export type WalOperation =
+  | 'StateUpdate'
+  | 'ActionExecuted'
+  | 'CheckpointCreated'
+  | 'TaskQueued'
+  | 'TaskCompleted'
+  | 'TaskFailed';
+
+export interface WalEntry {
+  id: number;
+  timestamp: number;
+  operation: WalOperation;
+  data: unknown;
+}
+
 export interface TaskQueueEntry {
   id: string;
+  sessionId: string;
   type: TaskType;
   payload: unknown;
   priority: number;

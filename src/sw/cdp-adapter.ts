@@ -49,6 +49,9 @@ export interface CdpSession {
   targetId: string;
   onEvent: (method: string, params: any) => void;
   onDetach: (reason: string) => void;
+  /** Internal handler refs so detach() can remove the listeners added in attach(). */
+  _eventListener?: (source: chrome.debugger.Debuggee, method: string, params: any) => void;
+  _detachListener?: (source: chrome.debugger.Debuggee, reason: string) => void;
 }
 
 class CdpAdapter {
@@ -99,18 +102,20 @@ class CdpAdapter {
 
         this.sessions.set(sessionId, session);
 
-        // Set up event listener for this target
-        chrome.debugger.onEvent.addListener((source, method, params) => {
+        // Set up event listeners for this target, keeping refs so they can be removed.
+        session._eventListener = (source, method, params) => {
           if (source.targetId === targetId) {
             session.onEvent(method, params);
           }
-        });
-
-        chrome.debugger.onDetach.addListener((source) => {
+        };
+        session._detachListener = (source) => {
           if (source.targetId === targetId) {
             session.onDetach('detached');
           }
-        });
+        };
+
+        chrome.debugger.onEvent.addListener(session._eventListener);
+        chrome.debugger.onDetach.addListener(session._detachListener);
 
         console.log('[CDP Adapter] Attached to target:', targetId, 'session:', sessionId);
         resolve(sessionId);
@@ -121,6 +126,14 @@ class CdpAdapter {
   async detach(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) return;
+
+    // Remove the per-session listeners so they don't accumulate across attaches.
+    if (session._eventListener) {
+      chrome.debugger.onEvent.removeListener(session._eventListener);
+    }
+    if (session._detachListener) {
+      chrome.debugger.onDetach.removeListener(session._detachListener);
+    }
 
     return new Promise((resolve) => {
       chrome.debugger.detach({ targetId: session.targetId }, () => {
@@ -210,6 +223,25 @@ class CdpAdapter {
 
   async getOuterHTML(sessionId: string, nodeId: number): Promise<any> {
     return this.sendCommand(sessionId, 'DOM', 'getOuterHTML', { nodeId });
+  }
+
+  async dispatchMouseEvent(
+    sessionId: string,
+    type: 'mousePressed' | 'mouseReleased' | 'mouseMoved',
+    x: number,
+    y: number,
+    button: 'left' | 'right' | 'middle' = 'left',
+    clickCount = 1,
+  ): Promise<any> {
+    return this.sendCommand(sessionId, 'Input', 'dispatchMouseEvent', { type, x, y, button, clickCount });
+  }
+
+  async insertText(sessionId: string, text: string): Promise<any> {
+    return this.sendCommand(sessionId, 'Input', 'insertText', { text });
+  }
+
+  async dispatchKeyEvent(sessionId: string, key: string, type: 'keyDown' | 'keyUp'): Promise<any> {
+    return this.sendCommand(sessionId, 'Input', 'dispatchKeyEvent', { type, key });
   }
 
   getActiveSessions(): string[] {

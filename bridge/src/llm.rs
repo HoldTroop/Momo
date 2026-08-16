@@ -1,9 +1,7 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
 use reqwest::Client;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -268,10 +266,9 @@ impl LlmGateway {
 
         let anthropic_messages = messages.into_iter().map(|m| AnthropicMessage {
             role: m.role,
-            content: if m.tool_calls.is_some() {
-                serde_json::to_value(m.tool_calls)?
-            } else {
-                serde_json::json!([{ "type": "text", "text": m.content }])
+            content: match m.tool_calls {
+                Some(tool_calls) => serde_json::to_value(tool_calls).unwrap_or(Value::Null),
+                None => serde_json::json!([{ "type": "text", "text": m.content }]),
             },
         }).collect();
 
@@ -334,10 +331,9 @@ impl LlmGateway {
 
         let anthropic_messages = messages.into_iter().map(|m| AnthropicMessage {
             role: m.role,
-            content: if m.tool_calls.is_some() {
-                serde_json::to_value(m.tool_calls)?
-            } else {
-                serde_json::json!([{ "type": "text", "text": m.content }])
+            content: match m.tool_calls {
+                Some(tool_calls) => serde_json::to_value(tool_calls).unwrap_or(Value::Null),
+                None => serde_json::json!([{ "type": "text", "text": m.content }]),
             },
         }).collect();
 

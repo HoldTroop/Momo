@@ -16,8 +16,7 @@ class OffscreenAgent {
   private llmWorker: Worker | null = null;
   private watchdogInterval: number | null = null;
   private metricsInterval: number | null = null;
-  private simulationEngine: HumanSimulationEngine | null = null;
-  private port: MessagePort | null = null;
+  private port: chrome.runtime.Port | null = null;
   private startTime = Date.now();
 
   constructor() {
@@ -44,9 +43,12 @@ class OffscreenAgent {
     // Kill switch handler
     this.killSwitchEl.addEventListener('click', () => this.handleKillSwitch());
 
-    // Initialize components
+    // Initialize components.
+    // Human input simulation lives in the service worker (chrome.debugger) — the
+    // offscreen document no longer owns a SIMULATE_* input path.
+    this.simEl.textContent = 'Disabled (chrome.debugger)';
+    this.simEl.style.color = '#888';
     await this.initLlmWorker();
-    await this.initSimulationEngine();
     this.startWatchdog();
     this.startMetricsLoop();
 
@@ -69,13 +71,6 @@ class OffscreenAgent {
       this.llmEl.textContent = 'Unavailable';
       this.llmEl.style.color = '#f39c12';
     }
-  }
-
-  private async initSimulationEngine() {
-    this.simulationEngine = new HumanSimulationEngine();
-    this.log('info', 'Human Simulation Engine initialized');
-    this.simEl.textContent = 'Running';
-    this.simEl.style.color = '#2ecc71';
   }
 
   private startWatchdog() {
@@ -138,9 +133,6 @@ class OffscreenAgent {
       case 'LLM_REQUEST':
         this.handleLlmRequest(message.payload);
         break;
-      case 'SIMULATE_ACTION':
-        this.handleSimulation(message.payload);
-        break;
       case 'PERSIST_STATE':
         this.handlePersistState(message.payload);
         break;
@@ -163,33 +155,6 @@ class OffscreenAgent {
       } catch (e) {
         this.sendToSw({ type: 'LLM_RESPONSE', payload: { error: String(e) }, requestId: payload.requestId });
       }
-    }
-  }
-
-  private async handleSimulation(payload: any) {
-    if (!this.simulationEngine) {
-      this.log('error', 'Simulation engine not initialized');
-      return;
-    }
-
-    try {
-      switch (payload.action) {
-        case 'click':
-          await this.simulationEngine.click(payload.x, payload.y, payload.profile);
-          break;
-        case 'type':
-          await this.simulationEngine.typeText(payload.text, payload.profile);
-          break;
-        case 'scroll':
-          await this.simulationEngine.scroll(payload.x, payload.y, payload.deltaX, payload.deltaY, payload.profile);
-          break;
-        case 'mouseMove':
-          await this.simulationEngine.mouseMove(payload.fromX, payload.fromY, payload.toX, payload.toY, payload.profile);
-          break;
-      }
-      this.sendToSw({ type: 'SIMULATION_COMPLETE', payload: { success: true }, requestId: payload.requestId });
-    } catch (e) {
-      this.sendToSw({ type: 'SIMULATION_COMPLETE', payload: { success: false, error: String(e) }, requestId: payload.requestId });
     }
   }
 
@@ -228,11 +193,9 @@ class OffscreenAgent {
       this.log('info', 'LLM Worker terminated');
     }
 
-    // Stop simulation engine
-    this.simulationEngine = null;
-    this.simEl.textContent = 'Terminated';
-    this.simEl.style.color = '#e94560';
-    this.log('info', 'Simulation Engine terminated');
+    // Simulation now lives in the SW (chrome.debugger); nothing to terminate here.
+    this.simEl.textContent = 'Disabled';
+    this.simEl.style.color = '#888';
 
     // Clear intervals
     if (this.watchdogInterval) {
@@ -287,7 +250,7 @@ class OffscreenAgent {
       running: this.isRunning,
       memory: 'memory' in performance ? Math.round((performance as any).memory.usedJSHeapSize / 1024 / 1024) : 0,
       llmWorker: !!this.llmWorker,
-      simulationEngine: !!this.simulationEngine,
+      simulationEngine: false,
       uptime: Date.now() - this.startTime,
     };
   }
@@ -311,37 +274,10 @@ class OffscreenAgent {
   }
 }
 
-// Human Simulation Engine (simplified version for offscreen)
-class HumanSimulationEngine {
-  async click(x: number, y: number, profile: any) {
-    // Send to bridge for CDP-based simulation
-    await chrome.runtime.sendNativeMessage('agent.bridge', {
-      type: 'SIMULATE_CLICK',
-      payload: { x, y, profile },
-    });
-  }
-
-  async typeText(text: string, profile: any) {
-    await chrome.runtime.sendNativeMessage('agent.bridge', {
-      type: 'SIMULATE_TYPE',
-      payload: { text, profile },
-    });
-  }
-
-  async scroll(x: number, y: number, deltaX: number, deltaY: number, profile: any) {
-    await chrome.runtime.sendNativeMessage('agent.bridge', {
-      type: 'SIMULATE_SCROLL',
-      payload: { x, y, deltaX, deltaY, profile },
-    });
-  }
-
-  async mouseMove(fromX: number, fromY: number, toX: number, toY: number, profile: any) {
-    await chrome.runtime.sendNativeMessage('agent.bridge', {
-      type: 'SIMULATE_MOUSE_MOVE',
-      payload: { fromX, fromY, toX, toY, profile },
-    });
-  }
-}
+// Note: the offscreen "Human Simulation Engine" was removed. Per the design
+// decision, chrome.debugger (in the service worker) is the sole input path and
+// the bridge authorizes every SIMULATE_* request. The offscreen document only
+// runs local LLM inference and hosts the kill switch.
 
 // Initialize
 const agent = new OffscreenAgent();

@@ -1,0 +1,11 @@
+# Build artifacts
+node_modules/
+dist/
+target/
+
+# Local secrets / MCP config (may contain tokens)
+.mcp.json
+
+# OS / editor noise
+.DS_Store
+*.log

@@ -70,11 +70,9 @@ export class AlarmManager {
 
     // Check if task is stuck (no progress for 2 minutes)
     const now = Date.now();
-    const lastProgress = state.history.length > 0
-      ? state.history[state.history.length - 1].timestamp
-      : state.checkpoints.length > 0
-        ? state.checkpoints[state.checkpoints.length - 1].timestamp
-        : 0;
+    const lastProgress = state.history.at(-1)?.timestamp
+      ?? state.checkpoints.at(-1)?.timestamp
+      ?? 0;
 
     if (now - lastProgress > 120_000 && this.orchestrator.isActive()) {
       console.warn('[Watchdog] Task appears stuck, attempting recovery');

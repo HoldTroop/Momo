@@ -62,7 +62,7 @@ class HumanInputSimulator {
 
     try {
       // Simple move to target
-      await this.mouseMove(x, y, p);
+      this.dispatchMouseEvent('mousemove', x, y, 0);
 
       // Small dwell for usability (not deception)
       await this.sleep(20);

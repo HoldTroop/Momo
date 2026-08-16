@@ -1,0 +1,71 @@
+import { describe, it, expect } from 'vitest';
+import { isSensitiveInput, redactText, redactInputValue } from './redaction.js';
+
+describe('isSensitiveInput', () => {
+  it('flags password inputs by type', () => {
+    expect(isSensitiveInput({ type: 'password' })).toBe(true);
+    expect(isSensitiveInput({ type: 'Password' })).toBe(true);
+  });
+
+  it('flags autocomplete secret tokens', () => {
+    expect(isSensitiveInput({ autocomplete: 'current-password' })).toBe(true);
+    expect(isSensitiveInput({ autocomplete: 'cc-number' })).toBe(true);
+    expect(isSensitiveInput({ autocomplete: 'one-time-code' })).toBe(true);
+  });
+
+  it('flags secret name/id fragments', () => {
+    expect(isSensitiveInput({ name: 'password' })).toBe(true);
+    expect(isSensitiveInput({ id: 'api_key' })).toBe(true);
+    expect(isSensitiveInput({ name: 'creditCardNumber' })).toBe(true);
+  });
+
+  it('does not flag ordinary fields', () => {
+    expect(isSensitiveInput({ type: 'text', name: 'username' })).toBe(false);
+    expect(isSensitiveInput({})).toBe(false);
+  });
+});
+
+describe('redactText', () => {
+  it('redacts credit-card numbers', () => {
+    expect(redactText('card 4111 1111 1111 1111 ok')).not.toContain('4111');
+    expect(redactText('card 4111 1111 1111 1111 ok')).toContain('[REDACTED]');
+  });
+
+  it('redacts emails and phone numbers', () => {
+    expect(redactText('mail alice@example.com now')).not.toContain('alice@example.com');
+    expect(redactText('call 555-123-4567 now')).not.toContain('555-123-4567');
+  });
+
+  it('redacts API-key style secrets', () => {
+    expect(redactText('key sk-abcdefghijklmnopqrstuvwxyz123456 end')).not.toContain('sk-');
+    expect(redactText('ghp_abcdefghijklmnopqrstuvwxyz123456 end')).not.toContain('ghp_');
+    expect(redactText('github_pat_abcdefghijklmnopqrstuvwxyz123456 end')).not.toContain(
+      'github_pat_'
+    );
+  });
+
+  it('redacts key: value assignments', () => {
+    expect(redactText('password: hunter2')).not.toContain('hunter2');
+    expect(redactText('authorization: Bearer abc123')).not.toContain('Bearer abc123');
+  });
+
+  it('leaves benign text intact', () => {
+    expect(redactText('hello world')).toBe('hello world');
+  });
+});
+
+describe('redactInputValue', () => {
+  it('drops the value entirely for sensitive fields', () => {
+    expect(redactInputValue({ type: 'password' }, 'hunter2')).toBe('');
+    expect(redactInputValue({ name: 'token' }, 'abc123')).toBe('');
+  });
+
+  it('strips embedded secrets from ordinary field values', () => {
+    const value = 'notes with sk-abcdefghijklmnopqrstuvwxyz123456 inside';
+    expect(redactInputValue({ type: 'text' }, value)).not.toContain('sk-');
+  });
+
+  it('passes through ordinary values untouched', () => {
+    expect(redactInputValue({ type: 'text' }, 'hello world')).toBe('hello world');
+  });
+});

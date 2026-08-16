@@ -1,4 +1,5 @@
 import { CompressedDom, ActionableElement, DomRect, LayoutNode } from '../sw/orchestrator.js';
+import { redactText } from './redaction.js';
 
 interface AxNode {
   role: string;
@@ -55,7 +56,7 @@ export class DomCompressor {
             selector,
             tag: this.roleToTag(node.role),
             role: node.role,
-            label: node.name || node.value || node.description || 'unnamed',
+            label: redactText(node.name || node.value || node.description || 'unnamed'),
             bounds: node.rect || this.emptyRect(),
             actionabilityScore: score,
             backendNodeId: node.backendDOMNodeId,

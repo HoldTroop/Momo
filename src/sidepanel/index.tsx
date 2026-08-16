@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
+import type { PlanStep } from '../sw/orchestrator.js';
 
 interface Message {
   id: string;
@@ -153,10 +154,12 @@ function App() {
       const idx = prev.findLastIndex(m => m.role === 'agent');
       if (idx === -1) return prev;
       const updated = [...prev];
+      const current = updated[idx];
+      if (!current) return prev;
       updated[idx] = {
-        ...updated[idx],
-        toolResults: [...(updated[idx].toolResults || []), result],
-        content: updated[idx].content + `\n\n**Result:** ${result.summary}`,
+        ...current,
+        toolResults: [...(current.toolResults || []), result],
+        content: current.content + `\n\n**Result:** ${result.summary}`,
       };
       return updated;
     });
@@ -167,7 +170,9 @@ function App() {
       const idx = prev.findLastIndex(m => m.role === 'agent');
       if (idx === -1) return prev;
       const updated = [...prev];
-      updated[idx] = { ...updated[idx], content: updated[idx].content + text };
+      const current = updated[idx];
+      if (!current) return prev;
+      updated[idx] = { ...current, content: current.content + text };
       return updated;
     });
   };
