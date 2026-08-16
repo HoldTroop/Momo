@@ -69,8 +69,8 @@ BREAKING CHANGE: users must now grant the debugger permission on first CDP attac
 
 1. Use the PR template (auto-loaded) and check the change-type box.
 2. Label the PR (`feature`, `fix`, `bug`, `chore`, `documentation`,
-   `breaking-change`, etc.) — `release-drafter` uses these labels to auto-draft
-   the next release.
+   `breaking-change`, etc.) — the label feeds the auto-generated release notes
+   and `CHANGELOG.md` categorization.
 3. Update `CHANGELOG.md` under `[Unreleased]` for anything user-facing.
 4. Reference any related issue with `Closes #<number>`.
 
@@ -78,13 +78,12 @@ BREAKING CHANGE: users must now grant the debugger permission on first CDP attac
 
 Releases follow the `-legacy` line naming (`v0.1.0-legacy`, `v0.2.0-legacy`, …).
 
-Two pieces of automation handle this for you:
+One workflow handles this for you:
 
-- **`.github/workflows/release-drafter.yml`** — continuously drafts a release
-  from merged PRs, auto-categorized by label. Review it before shipping.
 - **`.github/workflows/release.yml`** — on any `v*` tag push, builds the
   extension (`dist/`), packages it into a zip, and creates a **draft** release
-  with auto-generated notes so a human publishes it after review.
+  with auto-generated notes (from merged PRs/commits) so a human publishes it
+  after review.
 
 To cut a release:
 
