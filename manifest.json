@@ -1,0 +1,100 @@
+{
+  "name": "Autonomous AI Agent",
+  "version": "1.0.0",
+  "description": "Policy-compliant autonomous AI browser agent operating in local context with transparent interaction",
+  "manifest_version": 3,
+  "minimum_chrome_version": "118",
+
+  "background": {
+    "service_worker": "dist/sw/index.js",
+    "type": "module"
+  },
+
+  "permissions": [
+    "nativeMessaging",
+    "storage",
+    "alarms",
+    "offscreen",
+    "tabs",
+    "scripting",
+    "sidePanel",
+    "unlimitedStorage"
+  ],
+
+  "optional_permissions": [
+    "debugger",
+    "pushMessaging"
+  ],
+
+  "host_permissions": [],
+
+  "optional_host_permissions": [
+    "<all_urls>"
+  ],
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": [
+        "dist/content/ax-extractor.js",
+        "dist/content/dom-observer.js",
+        "dist/content/human-input.js",
+        "dist/lib/automation-hygiene.js"
+      ],
+      "world": "ISOLATED",
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+
+  "offscreen_documents": [
+    {
+      "url": "dist/offscreen/index.html",
+      "reasons": ["WORKERS", "AUDIO_PLAYBACK"],
+      "justification": "Long-running ML inference, autonomous watchdog"
+    }
+  ],
+
+  "side_panel": {
+    "default_path": "dist/sidepanel/index.html"
+  },
+
+  "web_accessible_resources": [
+    {
+      "resources": ["injected/*.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+
+  "externally_connectable": {
+    "matches": ["*://localhost/*", "*://127.0.0.1/*"]
+  },
+
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; worker-src 'self' blob:;"
+  },
+
+  "action": {
+    "default_title": "Autonomous AI Agent",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "autonomous-agent@local",
+      "strict_min_version": "115.0"
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "agent.bridge",
+  "description": "Native Messaging host for Autonomous AI Agent",
+  "path": "agent-bridge",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://__EXTENSION_ID__/"]
+}
