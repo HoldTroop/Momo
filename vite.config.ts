@@ -16,7 +16,6 @@ export default defineConfig({
         'content/dom-observer': resolve(__dirname, 'src/content/dom-observer.ts'),
         'content/human-input': resolve(__dirname, 'src/content/human-input.ts'),
         'offscreen/index': resolve(__dirname, 'src/offscreen/index.ts'),
-        'offscreen/llm-worker': resolve(__dirname, 'src/offscreen/llm-worker.ts'),
         'sidepanel/index': resolve(__dirname, 'src/sidepanel/index.tsx'),
       },
       output: {
@@ -25,7 +24,6 @@ export default defineConfig({
         assetFileNames: 'assets/[name].[ext]',
         format: 'es',
       },
-      external: ['@mlc-ai/web-llm'],
     },
   },
   resolve: {

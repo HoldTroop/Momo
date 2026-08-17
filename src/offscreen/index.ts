@@ -9,11 +9,9 @@ class OffscreenAgent {
   private logsEl: HTMLElement;
   private memEl: HTMLElement;
   private uptimeEl: HTMLElement;
-  private llmEl: HTMLElement;
   private simEl: HTMLElement;
   private killSwitchEl: HTMLButtonElement;
   private isRunning = false;
-  private llmWorker: Worker | null = null;
   private watchdogInterval: number | null = null;
   private metricsInterval: number | null = null;
   private port: chrome.runtime.Port | null = null;
@@ -24,7 +22,6 @@ class OffscreenAgent {
     this.logsEl = document.getElementById('logs')!;
     this.memEl = document.getElementById('mem-metric')!;
     this.uptimeEl = document.getElementById('uptime-metric')!;
-    this.llmEl = document.getElementById('llm-metric')!;
     this.simEl = document.getElementById('sim-metric')!;
     this.killSwitchEl = document.getElementById('kill-switch') as HTMLButtonElement;
     this.init();
@@ -48,29 +45,11 @@ class OffscreenAgent {
     // offscreen document no longer owns a SIMULATE_* input path.
     this.simEl.textContent = 'Disabled (chrome.debugger)';
     this.simEl.style.color = '#888';
-    await this.initLlmWorker();
     this.startWatchdog();
     this.startMetricsLoop();
 
     this.setStatus('running', 'Offscreen agent running');
     this.log('info', 'Offscreen agent initialized');
-  }
-
-  private async initLlmWorker() {
-    try {
-      // Create a web worker for local LLM inference (WebLLM)
-      // For now, we'll use a simple worker that proxies to the bridge
-      this.llmWorker = new Worker(new URL('./llm-worker.ts', import.meta.url), { type: 'module' });
-      this.llmWorker.onmessage = (e) => this.handleWorkerMessage(e.data);
-      this.llmWorker.onerror = (e) => this.log('error', `LLM Worker error: ${e.message}`);
-      this.log('info', 'LLM Worker initialized');
-      this.llmEl.textContent = 'Running';
-      this.llmEl.style.color = '#2ecc71';
-    } catch (e) {
-      this.log('warn', `LLM Worker not available: ${e}`);
-      this.llmEl.textContent = 'Unavailable';
-      this.llmEl.style.color = '#f39c12';
-    }
   }
 
   private startWatchdog() {
@@ -130,9 +109,6 @@ class OffscreenAgent {
 
   private handleMessage(message: any) {
     switch (message.type) {
-      case 'LLM_REQUEST':
-        this.handleLlmRequest(message.payload);
-        break;
       case 'PERSIST_STATE':
         this.handlePersistState(message.payload);
         break;
@@ -142,33 +118,9 @@ class OffscreenAgent {
     }
   }
 
-  private async handleLlmRequest(payload: any) {
-    this.log('info', `LLM request: ${payload.model}`);
-
-    if (this.llmWorker) {
-      this.llmWorker.postMessage({ type: 'COMPLETE', payload });
-    } else {
-      // Fallback: proxy to bridge
-      try {
-        const result = await this.sendToBridge({ type: 'LLM_COMPLETE', payload });
-        this.sendToSw({ type: 'LLM_RESPONSE', payload: result, requestId: payload.requestId });
-      } catch (e) {
-        this.sendToSw({ type: 'LLM_RESPONSE', payload: { error: String(e) }, requestId: payload.requestId });
-      }
-    }
-  }
-
   private handlePersistState(payload: any) {
     // Forward to persistence
     this.sendToSw({ type: 'PERSIST_STATE', payload });
-  }
-
-  private handleWorkerMessage(data: any) {
-    if (data.type === 'LLM_CHUNK') {
-      this.sendToSw({ type: 'LLM_STREAM_CHUNK', payload: data.chunk, requestId: data.requestId });
-    } else if (data.type === 'LLM_COMPLETE') {
-      this.sendToSw({ type: 'LLM_RESPONSE', payload: data.result, requestId: data.requestId });
-    }
   }
 
   private handleDisconnect() {
@@ -184,16 +136,7 @@ class OffscreenAgent {
     this.killSwitchEl.textContent = '🛑 KILLED';
     this.killSwitchEl.style.background = '#666';
 
-    // Terminate LLM worker
-    if (this.llmWorker) {
-      this.llmWorker.terminate();
-      this.llmWorker = null;
-      this.llmEl.textContent = 'Terminated';
-      this.llmEl.style.color = '#e94560';
-      this.log('info', 'LLM Worker terminated');
-    }
-
-    // Simulation now lives in the SW (chrome.debugger); nothing to terminate here.
+    // Simulation lives in the SW (chrome.debugger); nothing to terminate here.
     this.simEl.textContent = 'Disabled';
     this.simEl.style.color = '#888';
 
@@ -249,7 +192,6 @@ class OffscreenAgent {
     return {
       running: this.isRunning,
       memory: 'memory' in performance ? Math.round((performance as any).memory.usedJSHeapSize / 1024 / 1024) : 0,
-      llmWorker: !!this.llmWorker,
       simulationEngine: false,
       uptime: Date.now() - this.startTime,
     };
@@ -274,10 +216,11 @@ class OffscreenAgent {
   }
 }
 
-// Note: the offscreen "Human Simulation Engine" was removed. Per the design
-// decision, chrome.debugger (in the service worker) is the sole input path and
-// the bridge authorizes every SIMULATE_* request. The offscreen document only
-// runs local LLM inference and hosts the kill switch.
+// Note: the offscreen "Human Simulation Engine" was removed and there is no
+// internal LLM. Per the design decision, chrome.debugger (in the service worker)
+// is the sole input path and the bridge authorizes every SIMULATE_* request.
+// The offscreen document now only relays native-messaging requests, runs the
+// watchdog/health check, and hosts the kill switch.
 
 // Initialize
 const agent = new OffscreenAgent();
