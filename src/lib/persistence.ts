@@ -51,6 +51,13 @@ interface TaskRecord {
 class PersistenceManager {
   private db: any = null;
   private initialized = false;
+  /**
+   * Sessions deleted this service-worker lifetime. Guards against the race where
+   * a saveSession() that was already in flight (or issued just after) re-inserts
+   * a session row after deleteSession() committed. Session ids are UUIDs and are
+   * never reused, so retaining the tombstone for the SW lifetime is safe (MOMO-114).
+   */
+  private deletedSessions = new Set<string>();
 
   async init(): Promise<void> {
     if (this.initialized) return;
@@ -95,6 +102,7 @@ class PersistenceManager {
 
   async saveSession(sessionId: string, state: AgentState): Promise<void> {
     if (!this.initialized) await this.init();
+    if (this.deletedSessions.has(sessionId)) return;
 
     const existing = await this.db.sessions.get(sessionId);
     const record: SessionRecord = {
@@ -127,6 +135,10 @@ class PersistenceManager {
 
   async deleteSession(sessionId: string): Promise<void> {
     if (!this.initialized) await this.init();
+
+    // Tombstone before the async transaction so any concurrent saveSession()
+    // (which may still be issuing its put) skips the re-insert (MOMO-114).
+    this.deletedSessions.add(sessionId);
 
     await this.db.transaction('rw', this.db.sessions, this.db.wal, this.db.checkpoints, this.db.tasks, async () => {
       await this.db.sessions.delete(sessionId);
