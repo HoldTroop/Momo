@@ -89,3 +89,31 @@ export function redactInputValue(field: SensitiveFieldDescriptor, value: string)
   if (isSensitiveInput(field)) return '';
   return redactText(value);
 }
+
+/** Attribute names whose values must never be captured by the DOM observer. */
+export function isSensitiveAttribute(name: string): boolean {
+  const lower = (name || '').toLowerCase();
+  return lower.startsWith('data-') || lower === 'value';
+}
+
+/**
+ * Redact a single attribute value observed by the DOM observer. String-splitting
+ * only (no `window`/`URL`, since this module is imported from the SW/offscreen
+ * context). `data-*` and `value` are dropped entirely; `href`/`src` drop
+ * `data:`/`javascript:` payloads and otherwise strip query+fragment before the
+ * usual secret scrubbing; everything else is passed through.
+ */
+export function redactAttributeValue(name: string, value: string): string {
+  if (isSensitiveAttribute(name)) return '';
+  if (!value) return value;
+
+  const lower = (name || '').toLowerCase();
+  if (lower === 'href' || lower === 'src') {
+    const trimmed = value.trim();
+    if (/^(?:data:|javascript:)/i.test(trimmed)) return '[REDACTED]';
+    const base = trimmed.split(/[?#]/)[0] ?? '';
+    return redactText(base);
+  }
+
+  return redactText(value);
+}

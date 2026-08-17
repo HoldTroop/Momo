@@ -1,3 +1,5 @@
+import { redactAttributeValue } from '../lib/redaction.js';
+
 interface DomChange {
   type: 'childList' | 'attributes' | 'characterData';
   target: string; // selector or xpath
@@ -38,8 +40,10 @@ class DomObserver {
             .map(n => this.getSelector(n as Element));
         } else if (mutation.type === 'attributes') {
           change.attributeName = mutation.attributeName || undefined;
-          change.oldValue = mutation.oldValue || undefined;
-          change.newValue = (mutation.target as Element).getAttribute(mutation.attributeName || '') || undefined;
+          const attrName = change.attributeName ?? '';
+          change.oldValue = mutation.oldValue ? redactAttributeValue(attrName, mutation.oldValue) : undefined;
+          const rawNewValue = (mutation.target as Element).getAttribute(mutation.attributeName || '');
+          change.newValue = rawNewValue != null ? redactAttributeValue(attrName, rawNewValue) : undefined;
         }
 
         this.bufferChange(change);

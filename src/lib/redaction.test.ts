@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { isSensitiveInput, redactText, redactInputValue, redactValue } from './redaction.js';
+import {
+  isSensitiveInput,
+  redactText,
+  redactInputValue,
+  redactValue,
+  isSensitiveAttribute,
+  redactAttributeValue,
+} from './redaction.js';
 
 describe('isSensitiveInput', () => {
   it('flags password inputs by type', () => {
@@ -96,5 +103,42 @@ describe('redactValue', () => {
     expect(redactValue(null)).toBe(null);
     expect(redactValue(date)).toBe(date);
     expect(redactValue(map)).toBe(map);
+  });
+});
+
+describe('isSensitiveAttribute', () => {
+  it('flags data-* and value attributes', () => {
+    expect(isSensitiveAttribute('data-token')).toBe(true);
+    expect(isSensitiveAttribute('DATA-FOO')).toBe(true);
+    expect(isSensitiveAttribute('value')).toBe(true);
+    expect(isSensitiveAttribute('VALUE')).toBe(true);
+  });
+
+  it('does not flag ordinary attributes', () => {
+    expect(isSensitiveAttribute('class')).toBe(false);
+    expect(isSensitiveAttribute('href')).toBe(false);
+    expect(isSensitiveAttribute('')).toBe(false);
+  });
+});
+
+describe('redactAttributeValue', () => {
+  it('drops data-* and value entirely', () => {
+    expect(redactAttributeValue('data-token', 'sk-abcdefghijklmnopqrstuvwxyz123456')).toBe('');
+    expect(redactAttributeValue('value', 'hunter2')).toBe('');
+  });
+
+  it('redacts data: and javascript: urls', () => {
+    expect(redactAttributeValue('href', 'javascript:alert(1)')).toBe('[REDACTED]');
+    expect(redactAttributeValue('src', 'data:text/html,<script>bad</script>')).toBe('[REDACTED]');
+  });
+
+  it('strips query and fragment from ordinary urls', () => {
+    expect(redactAttributeValue('href', 'https://example.com/path?token=sk-abcdefghijklmnopqrstuvwxyz123456#frag')).toBe(
+      'https://example.com/path'
+    );
+  });
+
+  it('scrubs secrets embedded in non-url attributes', () => {
+    expect(redactAttributeValue('title', 'mail alice@example.com now')).not.toContain('alice@example.com');
   });
 });
