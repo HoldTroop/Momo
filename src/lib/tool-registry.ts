@@ -18,6 +18,7 @@ export interface ToolContext {
   variables: Record<string, unknown>;
   step: ToolCall;
   allowlist: string[];
+  /** Read-only-tool token budget; write actions are budgeted by the Rust bridge. */
   tokenBudget: { max: number; used: number };
   pageRevision: number;
   sessionId: string;
@@ -70,6 +71,14 @@ function originOf(url: string): string {
   }
 }
 
+/**
+ * Local token accounting for the read-only tools (scroll/extract/wait/observe),
+ * which are not gated by the bridge. Write actions (navigate/click/type/
+ * human_click/human_type) are budgeted exclusively by the Rust PolicyEngine —
+ * the single authoritative ledger — which deducts only after an `allowed`
+ * decision (MOMO-079/082). Keeping the two ledgers disjoint avoids
+ * double-charging any single action.
+ */
 function deductTokens(budget: { max: number; used: number }, cost: number): void {
   budget.used += cost;
   if (budget.used > budget.max) {
@@ -107,8 +116,6 @@ export class ToolRegistry {
         tokenCost: 100,
       },
       execute: async (args, context) => {
-        deductTokens(context.tokenBudget, 100);
-
         const url = args.url as string;
         const waitUntil = args.waitUntil as string || 'networkidle';
         const origin = originOf(context.dom.url);
@@ -231,8 +238,6 @@ export class ToolRegistry {
         tokenCost: 10,
       },
       execute: async (args, context) => {
-        deductTokens(context.tokenBudget, 10);
-
         const selector = args.selector as string;
         const xpath = args.xpath as string | undefined;
         const textHint = args.text as string | undefined;
@@ -422,8 +427,6 @@ export class ToolRegistry {
         tokenCost: 5,
       },
       execute: async (args, context) => {
-        deductTokens(context.tokenBudget, 5);
-
         const selector = args.selector as string;
         const text = args.text as string;
         const clearFirst = args.clearFirst as boolean ?? true;
@@ -788,8 +791,6 @@ export class ToolRegistry {
         tokenCost: 10,
       },
       execute: async (args, context) => {
-        deductTokens(context.tokenBudget, 10);
-
         const x = args.x as number;
         const y = args.y as number;
         const origin = originOf(context.dom.url);
@@ -858,8 +859,6 @@ export class ToolRegistry {
         tokenCost: 5,
       },
       execute: async (args, context) => {
-        deductTokens(context.tokenBudget, 5);
-
         const text = args.text as string;
         const origin = originOf(context.dom.url);
         const target = 'focused-element';
