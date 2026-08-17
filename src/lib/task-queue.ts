@@ -4,6 +4,7 @@ import { TaskQueueEntry, TaskType, RetryPolicy, TaskStatus } from '../sw/orchest
 export class TaskQueue {
   private persistence: PersistenceManager;
   private processing = false;
+  private sessionId: string | null = null;
   private processorInterval: number | null = null;
 
   constructor(persistence: PersistenceManager) {
@@ -25,15 +26,19 @@ export class TaskQueue {
   }
 
   async startProcessing(sessionId: string, processor: (entry: TaskQueueEntry) => Promise<void>) {
-    if (this.processing) return;
+    if (this.processing && this.sessionId === sessionId) return;
+    this.stopProcessing();
     this.processing = true;
+    this.sessionId = sessionId;
 
     // Recover tasks stranded in `running` from a prior service-worker lifetime.
     await this.persistence.requeueStaleRunningTasks(sessionId, Date.now() - 60_000);
 
     this.processorInterval = window.setInterval(async () => {
+      const currentSessionId = this.sessionId;
+      if (!currentSessionId) return;
       try {
-        await this.processNext(sessionId, processor);
+        await this.processNext(currentSessionId, processor);
       } catch (error) {
         console.error('[TaskQueue] Processing error:', error);
       }
@@ -42,6 +47,7 @@ export class TaskQueue {
 
   async stopProcessing() {
     this.processing = false;
+    this.sessionId = null;
     if (this.processorInterval) {
       clearInterval(this.processorInterval);
       this.processorInterval = null;
@@ -52,7 +58,8 @@ export class TaskQueue {
     const entry = await this.persistence.getNextPendingTask(sessionId);
     if (!entry) return;
 
-    await this.persistence.updateTask(entry.id, { status: 'running', attempts: entry.attempts + 1 });
+    entry.attempts += 1;
+    await this.persistence.updateTask(entry.id, { status: 'running', attempts: entry.attempts });
 
     try {
       await processor(entry);

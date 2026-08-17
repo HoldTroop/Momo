@@ -594,6 +594,7 @@ export class AgentOrchestrator {
 
   /** Delete a persisted session and clear it from memory if it is active. */
   async deleteSession(sessionId: string): Promise<void> {
+    this.taskQueue.stopProcessing();
     await this.persistence.deleteSession(sessionId);
     if (this.activeSessionId === sessionId) {
       this.activeSessionId = null;
