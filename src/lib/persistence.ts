@@ -49,7 +49,6 @@ interface TaskRecord {
 class PersistenceManager {
   private db: any = null;
   private initialized = false;
-  private walPosition = 0;
 
   async init(): Promise<void> {
     if (this.initialized) return;
@@ -135,7 +134,6 @@ class PersistenceManager {
     };
 
     const id = await this.db.wal.add(record);
-    this.walPosition = id;
     return id;
   }
 
@@ -155,8 +153,12 @@ class PersistenceManager {
     }));
   }
 
-  getWalPosition(): number {
-    return this.walPosition;
+  async getWalPosition(): Promise<number> {
+    if (!this.initialized) await this.init();
+    // The WAL position is the highest auto-increment id actually persisted, not
+    // an in-memory counter that resets on service-worker restart (MOMO-116).
+    const last = await this.db.wal.orderBy('id').last();
+    return last?.id ?? 0;
   }
 
   async saveCheckpoint(sessionId: string, checkpoint: Checkpoint): Promise<void> {
@@ -296,9 +298,6 @@ class PersistenceManager {
       // a restored session is never mid-confirmation — the confirmation is
       // re-armed by re-execution, or the session is errored on restart (D1).
       pendingHumanIntervention: null,
-      domCache: new Map(
-        Array.from(state.domCache.entries()).map(([url, dom]) => [url, this.redactCompressedDom(dom)])
-      ),
       history: state.history.map(step => ({
         ...step,
         result: {
@@ -310,18 +309,11 @@ class PersistenceManager {
   }
 
   private serializeState(state: AgentState): any {
-    return SuperJSON.serialize({
-      ...state,
-      domCache: Array.from(state.domCache.entries()),
-    });
+    return SuperJSON.serialize({ ...state });
   }
 
   private deserializeState(data: any): AgentState {
-    const deserialized = SuperJSON.deserialize(data) as any;
-    return {
-      ...deserialized,
-      domCache: new Map(deserialized.domCache || []),
-    };
+    return SuperJSON.deserialize(data) as AgentState;
   }
 
   private deserializeTask(record: TaskRecord): TaskQueueEntry {

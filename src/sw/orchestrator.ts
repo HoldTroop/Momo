@@ -17,7 +17,6 @@ export interface AgentState {
   plan: Plan | null;
   currentStep: number;
   history: ExecutionStep[];
-  domCache: Map<string, CompressedDom>;
   variables: Record<string, unknown>;
   checkpoints: Checkpoint[];
   // New fields for policy compliance
@@ -237,7 +236,6 @@ export class AgentOrchestrator {
       plan: options?.plan || null,
       currentStep: 0,
       history: [],
-      domCache: new Map(),
       variables: {},
       checkpoints: [],
       paused: false,
@@ -409,12 +407,16 @@ export class AgentOrchestrator {
     return this.cdpSessionId;
   }
 
-  private awaitConfirmation(action: ToolCall, stepId: string, result: ToolResult): Promise<'confirm' | 'deny' | 'takeover'> {
-    const confirmationData = result.confirmationData;
-    if (!confirmationData) {
-      throw new Error('Confirmation requested without confirmation data');
-    }
-
+  /**
+   * Open a human-intervention prompt and await the decision. Both the
+   * confirmation flow (awaitConfirmation) and failure escalation (escalateToHuman)
+   * use this; a single pending intervention is held at a time.
+   */
+  private requestIntervention(
+    stepId: string,
+    action: ToolCall,
+    payload: Record<string, unknown>,
+  ): Promise<'confirm' | 'deny' | 'takeover'> {
     return new Promise((resolve, reject) => {
       if (!this.state) {
         reject(new Error('No active state'));
@@ -442,18 +444,29 @@ export class AgentOrchestrator {
         type: 'HUMAN_INTERVENTION_REQUIRED',
         payload: {
           stepId,
-          origin: confirmationData.origin,
-          action: action.name,
-          target: confirmationData.target,
-          // Use the tool's redacted confirmation payload, not the raw arguments
-          // (which may include typed text) — MOMO-041.
-          data: confirmationData.data,
-          reversible: confirmationData.reversible,
-          riskClass: confirmationData.riskClass,
           actionHash,
           pageRevision: this.state.pageRevision,
+          ...payload,
         },
       });
+    });
+  }
+
+  private awaitConfirmation(action: ToolCall, stepId: string, result: ToolResult): Promise<'confirm' | 'deny' | 'takeover'> {
+    const confirmationData = result.confirmationData;
+    if (!confirmationData) {
+      throw new Error('Confirmation requested without confirmation data');
+    }
+
+    return this.requestIntervention(stepId, action, {
+      origin: confirmationData.origin,
+      action: action.name,
+      target: confirmationData.target,
+      // Use the tool's redacted confirmation payload, not the raw arguments
+      // (which may include typed text) — MOMO-041.
+      data: confirmationData.data,
+      reversible: confirmationData.reversible,
+      riskClass: confirmationData.riskClass,
     });
   }
 
@@ -610,14 +623,14 @@ export class AgentOrchestrator {
         // failed attempts for this step, escalate instead of looping forever.
         const attempts = this.state?.history.filter(h => h.stepId === step.id).length ?? 0;
         if (attempts >= MAX_RETRY_ATTEMPTS) {
-          await this.escalateToHuman(step, result);
+          await this.escalateAndResolve(step, result);
           break;
         }
         await this.sleep(Math.min(RETRY_BACKOFF_BASE_MS * 2 ** attempts, RETRY_BACKOFF_MAX_MS));
         break;
       }
       case 'escalate':
-        await this.escalateToHuman(step, result);
+        await this.escalateAndResolve(step, result);
         break;
       case 'abort':
         await this.abortTask(result.error || 'Aborted by failure action', true);
@@ -625,25 +638,30 @@ export class AgentOrchestrator {
     }
   }
 
-  private async escalateToHuman(step: PlanStep, result: ToolResult) {
-    // Send to side panel for human intervention. Keep the payload aligned with
-    // requestConfirmation so the side panel can render a coherent prompt.
-    chrome.runtime.sendMessage({
-      type: 'HUMAN_INTERVENTION_REQUIRED',
-      payload: {
-        stepId: step.id,
-        error: result.error,
-        origin: await this.getCurrentOrigin(),
-        action: step.action.name,
-        target: this.actionTarget(step.action),
-        data: step.action.arguments,
-        reversible: false,
-        riskClass: this.toolRegistry.get(step.action.name)?.policy.riskClass ?? 'write',
-        actionHash: this.hashAction(step.action),
-        pageRevision: this.state?.pageRevision || 0,
-      },
+  private async escalateToHuman(step: PlanStep, result: ToolResult): Promise<'confirm' | 'deny' | 'takeover'> {
+    // A failed step is escalated to the human, who decides retry / skip / abort.
+    // The action arguments are redacted before they reach the side panel.
+    return this.requestIntervention(step.id, step.action, {
+      error: result.error,
+      origin: await this.getCurrentOrigin(),
+      action: step.action.name,
+      target: this.actionTarget(step.action),
+      data: redactValue(step.action.arguments),
+      reversible: false,
+      riskClass: this.toolRegistry.get(step.action.name)?.policy.riskClass ?? 'write',
     });
-    this.abortController?.abort();
+  }
+
+  /** Resolve an escalated failure: retry (confirm), skip (deny), or hand over (takeover). */
+  private async escalateAndResolve(step: PlanStep, result: ToolResult): Promise<void> {
+    const decision = await this.escalateToHuman(step, result);
+    if (decision === 'deny') {
+      // Skip the failed step.
+      if (this.state) this.state.currentStep++;
+    } else if (decision === 'takeover') {
+      await this.abortTask('User took over');
+    }
+    // 'confirm' leaves the step in place so the run loop's `continue` retries it.
   }
 
   private actionTarget(action: ToolCall): string {
@@ -881,9 +899,7 @@ export class AgentOrchestrator {
   }
 
   handleTabUpdate(tabId: number, tab: chrome.tabs.Tab) {
-    // Invalidate DOM cache for updated tab
     if (tab.url && this.state) {
-      this.state.domCache.delete(tab.url);
       // Only count navigation of the tab the agent is driving, so background
       // tab loads don't falsely invalidate an in-flight human confirmation.
       if (tab.active) {
@@ -935,23 +951,9 @@ export class AgentOrchestrator {
       case 'periodic_observation':
         await this.captureDomSnapshot();
         break;
-      case 'cleanup':
-        this.cleanupOldCache();
-        break;
       case 'sync_state':
         await this.syncWithBridge();
         break;
-    }
-  }
-
-  private cleanupOldCache() {
-    if (!this.state) return;
-    const now = Date.now();
-    const MAX_AGE = 5 * 60 * 1000; // 5 minutes
-    for (const [url, dom] of this.state.domCache) {
-      if (now - dom.timestamp > MAX_AGE) {
-        this.state.domCache.delete(url);
-      }
     }
   }
 
