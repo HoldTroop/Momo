@@ -1,5 +1,6 @@
 import { ToolCall, ToolResult, CompressedDom } from '../sw/orchestrator.js';
 import { cdpAdapter } from '../sw/cdp-adapter.js';
+import { isSensitiveInput } from './redaction.js';
 
 export type RiskClass = 'read' | 'write' | 'navigation' | 'payment' | 'auth' | 'dangerous';
 
@@ -712,9 +713,29 @@ export class ToolRegistry {
         const origin = originOf(context.dom.url);
         const target = 'focused-element';
 
+        // Resolve the currently-focused element so the bridge can make an
+        // informed sensitive-field decision for selector-less (focused-element)
+        // typing. Fail closed if the active element cannot be inspected.
+        const focusedCheck = await chrome.scripting.executeScript({
+          target: { tabId: context.tabId, allFrames: false },
+          func: () => {
+            const el = document.activeElement as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+            if (!el) return null;
+            return {
+              type: (el as HTMLInputElement).type || '',
+              autocomplete: (el as HTMLInputElement).autocomplete || '',
+              name: (el as HTMLInputElement).name || '',
+              id: (el as HTMLInputElement).id || '',
+            };
+          },
+        });
+
+        const focusedField = focusedCheck[0]?.result;
+        const fieldIsSensitive = focusedField ? isSensitiveInput(focusedField) : true;
+
         const decision = await authorizeViaBridge({
           type: 'SIMULATE_TYPE',
-          payload: { session_id: context.sessionId, origin, target, selector: null, text },
+          payload: { session_id: context.sessionId, origin, target, selector: null, text, field_is_sensitive: fieldIsSensitive },
         });
 
         if (!decision || !decision.allowed) {

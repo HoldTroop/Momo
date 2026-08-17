@@ -439,7 +439,13 @@ impl PolicyEngine {
                 || selector.to_lowercase().contains("credit")
                 || selector.to_lowercase().contains("cvv")
         } else {
-            false
+            // Focused-element typing (no selector): the extension resolves the
+            // active element and reports its sensitivity. Fail closed when the
+            // flag is absent so an unqualified type is treated as sensitive.
+            request.arguments
+                .get("field_is_sensitive")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true)
         }
     }
 
@@ -620,5 +626,39 @@ mod tests {
         };
         let decision = engine.evaluate(&request).expect("evaluate");
         assert!(!decision.allowed);
+    }
+
+    #[test]
+    fn focused_human_type_uses_field_sensitivity_flag() {
+        let engine = engine_with_allowlist(vec!["example.com".to_string()]);
+        let sensitive = PolicyRequest {
+            session_id: "s1".into(),
+            action: "human_type".into(),
+            origin: "https://example.com".into(),
+            target: "focused-element".into(),
+            arguments: serde_json::json!({ "selector": null, "text_length": 8, "field_is_sensitive": true }),
+        };
+        let insensitive = PolicyRequest {
+            session_id: "s1".into(),
+            action: "human_type".into(),
+            origin: "https://example.com".into(),
+            target: "focused-element".into(),
+            arguments: serde_json::json!({ "selector": null, "text_length": 8, "field_is_sensitive": false }),
+        };
+        assert!(engine.evaluate(&sensitive).unwrap().requires_confirmation);
+        assert!(!engine.evaluate(&insensitive).unwrap().requires_confirmation);
+    }
+
+    #[test]
+    fn focused_human_type_without_flag_fails_closed() {
+        let engine = engine_with_allowlist(vec!["example.com".to_string()]);
+        let request = PolicyRequest {
+            session_id: "s1".into(),
+            action: "human_type".into(),
+            origin: "https://example.com".into(),
+            target: "focused-element".into(),
+            arguments: serde_json::json!({ "selector": null, "text_length": 8 }),
+        };
+        assert!(engine.evaluate(&request).unwrap().requires_confirmation);
     }
 }

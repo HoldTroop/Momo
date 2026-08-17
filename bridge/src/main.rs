@@ -26,7 +26,7 @@ enum BridgeRequest {
     // Input authorization (policy gate). The extension executes the authorized
     // action via chrome.debugger; the bridge never touches CDP directly.
     SimulateClick { session_id: String, origin: String, target: String, x: f64, y: f64 },
-    SimulateType { session_id: String, origin: String, target: String, selector: Option<String>, text: String },
+    SimulateType { session_id: String, origin: String, target: String, selector: Option<String>, text: String, field_is_sensitive: Option<bool> },
     SimulateScroll { session_id: String, origin: String, target: String, x: f64, y: f64, delta_x: f64, delta_y: f64 },
     SimulateMouseMove { session_id: String, origin: String, target: String, from_x: f64, from_y: f64, to_x: f64, to_y: f64 },
 
@@ -162,9 +162,11 @@ impl BridgeServer {
                 Ok(BridgeResponse::Ok { request_id, data })
             }
 
-            BridgeRequest::SimulateType { session_id, origin, target, selector, text } => {
+            BridgeRequest::SimulateType { session_id, origin, target, selector, text, field_is_sensitive } => {
                 // Redact the typed text from the policy arguments and audit log;
-                // only the length is recorded so secrets never reach disk.
+                // only the length is recorded so secrets never reach disk. The
+                // extension resolves the focused element and reports its
+                // sensitivity; absence fails closed in is_sensitive_field.
                 let data = self.authorize(PolicyRequest {
                     session_id,
                     action: "human_type".to_string(),
@@ -173,6 +175,7 @@ impl BridgeServer {
                     arguments: serde_json::json!({
                         "selector": selector,
                         "text_length": text.len(),
+                        "field_is_sensitive": field_is_sensitive,
                     }),
                 })?;
                 Ok(BridgeResponse::Ok { request_id, data })
