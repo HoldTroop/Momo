@@ -24,6 +24,13 @@ export interface ToolContext {
   sessionId: string;
   tabId: number;
   getCdpSession: () => Promise<string | null>;
+  /**
+   * One-shot human-confirmation grant. When true, the tool still runs the
+   * bridge's allow/deny check but skips the `requires_confirmation` early
+   * return — the human has already approved this exact action. Set only by the
+   * orchestrator's confirmation re-execution path.
+   */
+  preAuthorized?: boolean;
 }
 
 export type ToolExecutor = (args: Record<string, unknown>, context: ToolContext) => Promise<ToolResult>;
@@ -193,7 +200,7 @@ export class ToolRegistry {
           };
         }
 
-        if (decision.requires_confirmation) {
+        if (decision.requires_confirmation && !context.preAuthorized) {
           return {
             success: false,
             error: 'Requires confirmation',
@@ -301,7 +308,7 @@ export class ToolRegistry {
           };
         }
 
-        if (decision.requires_confirmation) {
+        if (decision.requires_confirmation && !context.preAuthorized) {
           return {
             success: false,
             error: 'Requires confirmation',
@@ -337,7 +344,7 @@ export class ToolRegistry {
         });
 
         const isSensitive = sensitiveCheck[0]?.result?.isSensitive;
-        if (isSensitive) {
+        if (isSensitive && !context.preAuthorized) {
           return {
             success: false,
             error: 'Sensitive field detected - requires human confirmation',
@@ -660,7 +667,7 @@ export class ToolRegistry {
           };
         }
 
-        if (decision.requires_confirmation) {
+        if (decision.requires_confirmation && !context.preAuthorized) {
           return {
             success: false,
             error: 'Requires confirmation',
@@ -748,7 +755,7 @@ export class ToolRegistry {
           };
         }
 
-        if (decision.requires_confirmation) {
+        if (decision.requires_confirmation && !context.preAuthorized) {
           return {
             success: false,
             error: 'Requires confirmation',

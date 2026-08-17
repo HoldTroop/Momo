@@ -5,6 +5,9 @@ import { redactText, redactValue } from '../lib/redaction.js';
 import { TaskQueue } from '../lib/task-queue.js';
 import { cdpAdapter } from './cdp-adapter.js';
 
+/** How long to wait for a human confirmation before auto-denying (MOMO-045). */
+const CONFIRMATION_TIMEOUT_MS = 60_000;
+
 export interface AgentState {
   sessionId: string;
   goal: string;
@@ -23,7 +26,7 @@ export interface AgentState {
 }
 
 export interface HumanInterventionState {
-  resolve: (response: HumanResponse) => void;
+  resolve: (decision: 'confirm' | 'deny' | 'takeover') => void;
   reject: (error: Error) => void;
   stepId: string;
   actionHash: string;
@@ -328,11 +331,21 @@ export class AgentOrchestrator {
       getCdpSession: () => this.getOrCreateCdpSession(),
     };
 
-    const result = await tool.execute(toolCall.arguments, context);
+    let result = await tool.execute(toolCall.arguments, context);
 
     // Check if tool requires confirmation
     if (result.requiresConfirmation && result.confirmationData) {
-      return this.redactResult(await this.requestConfirmation(toolCall, stepId, result));
+      const decision = await this.awaitConfirmation(toolCall, stepId, result);
+      if (decision === 'confirm') {
+        // Re-execute the exact confirmed action with a one-shot pre-auth grant.
+        result = await tool.execute(toolCall.arguments, { ...context, preAuthorized: true });
+      } else if (decision === 'deny') {
+        await this.abortTask('User denied confirmation');
+        result = { success: false, error: 'User denied confirmation', summary: 'Confirmation denied', navigationOccurred: false };
+      } else {
+        await this.abortTask('User took over');
+        result = { success: false, error: 'User took over', summary: 'Task taken over by user', navigationOccurred: false };
+      }
     }
 
     return this.redactResult(result);
@@ -360,7 +373,7 @@ export class AgentOrchestrator {
     return this.cdpSessionId;
   }
 
-  private async requestConfirmation(action: ToolCall, stepId: string, result: ToolResult): Promise<ToolResult> {
+  private awaitConfirmation(action: ToolCall, stepId: string, result: ToolResult): Promise<'confirm' | 'deny' | 'takeover'> {
     const confirmationData = result.confirmationData;
     if (!confirmationData) {
       throw new Error('Confirmation requested without confirmation data');
@@ -375,21 +388,19 @@ export class AgentOrchestrator {
       const actionHash = this.hashAction(action);
 
       this.state.pendingHumanIntervention = {
-        resolve: (response: HumanResponse) => {
-          if (response.action === 'confirm') {
-            resolve({ ...result, success: true });
-          } else if (response.action === 'deny') {
-            resolve({ ...result, success: false, error: 'User denied confirmation' });
-          } else {
-            // takeover - abort task
-            reject(new Error('User took over'));
-          }
-        },
+        resolve,
         reject,
         stepId,
         actionHash,
         pageRevision: this.state.pageRevision,
       };
+
+      // Auto-deny if the human doesn't respond within the timeout (MOMO-045).
+      setTimeout(() => {
+        if (this.state?.pendingHumanIntervention?.actionHash === actionHash) {
+          this.resolveIntervention('deny');
+        }
+      }, CONFIRMATION_TIMEOUT_MS);
 
       chrome.runtime.sendMessage({
         type: 'HUMAN_INTERVENTION_REQUIRED',
@@ -398,7 +409,9 @@ export class AgentOrchestrator {
           origin: this.getCurrentOrigin(),
           action: action.name,
           target: confirmationData.target,
-          data: action.arguments,
+          // Use the tool's redacted confirmation payload, not the raw arguments
+          // (which may include typed text) — MOMO-041.
+          data: confirmationData.data,
           reversible: confirmationData.reversible,
           riskClass: confirmationData.riskClass,
           actionHash,
@@ -435,8 +448,15 @@ export class AgentOrchestrator {
       return;
     }
 
-    pending.resolve(response);
-    this.state.pendingHumanIntervention = null;
+    this.resolveIntervention(response.action);
+  }
+
+  private resolveIntervention(decision: 'confirm' | 'deny' | 'takeover') {
+    const state = this.state;
+    const pending = state?.pendingHumanIntervention;
+    if (!state || !pending) return;
+    state.pendingHumanIntervention = null;
+    pending.resolve(decision);
   }
 
   private async verifyStep(step: PlanStep, result: ToolResult): Promise<boolean> {
