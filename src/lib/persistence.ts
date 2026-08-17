@@ -25,6 +25,8 @@ interface WalRecord {
 }
 
 interface CheckpointRecord {
+  /** Auto-increment primary key; multiple checkpoints can exist per session. */
+  id?: number;
   sessionId: string;
   stepIndex: number;
   stateSnapshot: unknown;
@@ -73,6 +75,17 @@ class PersistenceManager {
     }).upgrade(async (trans: any) => {
       // Migration from v1 to v2
       await trans.table('domCache').clear();
+    });
+
+    this.db.version(3).stores({
+      checkpoints: '++id, sessionId, stepIndex, timestamp',
+    }).upgrade(async (trans: any) => {
+      // v2 keyed checkpoints by `sessionId` (the primary key), so each session
+      // held at most one row. The auto-increment key lets a session accumulate
+      // multiple checkpoints. Changing the primary key recreates the table; the
+      // single stale v2 row per session is intentionally dropped rather than
+      // carried into the new append-only history (MOMO-072).
+      await trans.table('checkpoints').clear();
     });
 
     await this.db.open();
@@ -180,9 +193,8 @@ class PersistenceManager {
 
     const record = await this.db.checkpoints
       .where('sessionId').equals(sessionId)
-      .reverse()
       .sortBy('timestamp')
-      .then((arr: CheckpointRecord[]) => arr[0] || null);
+      .then((arr: CheckpointRecord[]) => arr[arr.length - 1] || null);
 
     return record ? {
       stepIndex: record.stepIndex,
