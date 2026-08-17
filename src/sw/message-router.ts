@@ -3,7 +3,32 @@ import { cdpAdapter } from './cdp-adapter.js';
 
 export class MessageRouter {
   private orchestrator: AgentOrchestrator;
-  private handlers: Map<string, (payload: unknown, sender: chrome.runtime.MessageSender) => Promise<unknown>> = new Map();
+  private handlers: Map<string, (payload: unknown, sender: chrome.runtime.MessageSender | undefined) => Promise<unknown>> = new Map();
+
+  /** Message types a content script (tab-attached, self-origin) may originate. */
+  private static readonly CONTENT_SCRIPT_MESSAGE_TYPES: ReadonlySet<string> = new Set([
+    'CDP_ATTACH_REQUEST',
+    'CDP_COMMAND',
+  ]);
+
+  /** CDP commands the content script's AX-extraction path is permitted to issue. */
+  private static readonly CDP_COMMAND_ALLOWLIST: Readonly<Record<string, ReadonlySet<string>>> = {
+    Accessibility: new Set(['getFullAXTree']),
+    DOM: new Set(['getDocument', 'querySelector', 'getBoxModel', 'getContentQuads', 'getNodeForLocation', 'getOuterHTML']),
+  };
+
+  /** Bridge request types that may be proxied; mutating/destructive ops are excluded. */
+  private static readonly BRIDGE_REQUEST_ALLOWLIST: ReadonlySet<string> = new Set([
+    'PING',
+    'GET_STATUS',
+    'POLICY_CHECK',
+    'POLICY_GET_CONFIG',
+    'POLICY_GET_AUDIT_LOG',
+    'SIMULATE_CLICK',
+    'SIMULATE_TYPE',
+    'SIMULATE_SCROLL',
+    'SIMULATE_MOUSE_MOVE',
+  ]);
 
   constructor(orchestrator: AgentOrchestrator) {
     this.orchestrator = orchestrator;
@@ -36,7 +61,7 @@ export class MessageRouter {
     this.handlers.set('OFFSCREEN_KILLED', this.handleOffscreenKilled.bind(this));
   }
 
-  async handle(message: unknown, sender: chrome.runtime.MessageSender): Promise<unknown> {
+  async handle(message: unknown, sender: chrome.runtime.MessageSender | undefined): Promise<unknown> {
     const msg = message as { type: string; payload?: unknown };
     const handler = this.handlers.get(msg.type);
 
@@ -45,10 +70,32 @@ export class MessageRouter {
     }
 
     try {
+      this.assertSenderAllowed(msg.type, sender);
       return await handler(msg.payload, sender);
     } catch (error) {
       console.error('[MessageRouter] Error handling', msg.type, error);
       return { error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /**
+   * Reject messages from untrusted senders before dispatching to a privileged
+   * handler. `sender` is undefined when a message is routed via a trusted
+   * extension port (side panel / offscreen), which PortManager only accepts for
+   * self-origin, non-tab connections.
+   */
+  private assertSenderAllowed(type: string, sender: chrome.runtime.MessageSender | undefined): void {
+    if (sender === undefined) return;
+
+    // Web pages (externally_connectable) and other extensions are not trusted.
+    if (sender.id !== chrome.runtime.id) {
+      throw new Error('Unauthorized sender');
+    }
+
+    // A content script (tab-attached) may only originate the AX-extraction
+    // messages; every other privileged message must come from an extension page.
+    if (sender.tab !== undefined && !MessageRouter.CONTENT_SCRIPT_MESSAGE_TYPES.has(type)) {
+      throw new Error(`Message type not permitted from content scripts: ${type}`);
     }
   }
 
@@ -128,6 +175,15 @@ export class MessageRouter {
       sessionId: string;
     };
 
+    // Only the read-only commands the content-script AX extraction needs may be
+    // forwarded; arbitrary debugger commands (e.g. Runtime.evaluate, Input.*,
+    // Network.*, Page.*) are rejected so a compromised content script cannot
+    // drive the debugger.
+    const allowedCommands = MessageRouter.CDP_COMMAND_ALLOWLIST[domain];
+    if (!allowedCommands?.has(command)) {
+      return { error: `CDP command not allowed: ${domain}.${command}` };
+    }
+
     try {
       // Use chrome.debugger via adapter
       const result = await cdpAdapter.sendCommand(sessionId, domain, command, params);
@@ -166,10 +222,13 @@ export class MessageRouter {
     }
   }
 
-  /** Proxy an LLM/offscreen request to the native bridge and unwrap its data. */
+  /** Proxy a request to the native bridge and unwrap its data, surfacing Error envelopes. */
   private async proxyToBridge(payload: unknown): Promise<unknown> {
     try {
       const response = await chrome.runtime.sendNativeMessage('agent.bridge', payload as object);
+      if (response?.type === 'Error') {
+        return { error: response?.payload?.message ?? 'Native host error' };
+      }
       return response?.payload?.data ?? response?.payload ?? response;
     } catch (e) {
       return { error: String(e) };
@@ -177,6 +236,11 @@ export class MessageRouter {
   }
 
   private async handleBridgeRequest(payload: unknown) {
+    const request = payload as { type?: string } | null;
+    const type = request?.type;
+    if (!type || !MessageRouter.BRIDGE_REQUEST_ALLOWLIST.has(type)) {
+      return { error: `Bridge request type not allowed: ${type ?? 'missing'}` };
+    }
     return this.proxyToBridge(payload);
   }
 

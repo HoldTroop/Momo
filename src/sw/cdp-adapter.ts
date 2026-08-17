@@ -56,7 +56,6 @@ export interface CdpSession {
 
 class CdpAdapter {
   private sessions: Map<string, CdpSession> = new Map();
-  private nextSessionId = 1;
   private targetListeners: Map<string, (targetInfo: chrome.debugger.TargetInfo) => void> = new Map();
   private eventListeners: Map<string, Set<(method: string, params: any) => void>> = new Map();
 
@@ -77,7 +76,7 @@ class CdpAdapter {
 
   async attach(targetId: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const sessionId = `cdp-${this.nextSessionId++}`;
+      const sessionId = `cdp-${crypto.randomUUID()}`;
 
       chrome.debugger.attach({ targetId }, '1.3', () => {
         if (chrome.runtime.lastError) {

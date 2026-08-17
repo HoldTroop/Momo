@@ -20,6 +20,19 @@ export class PortManager {
   }
 
   handlePort(port: chrome.runtime.Port) {
+    // Only self-origin, non-tab extension contexts may open a control port.
+    // `port.sender` is undefined for extension pages (side panel / offscreen);
+    // it is populated for content scripts (tab) and for web pages / other
+    // extensions. Reject both so privileged messages cannot be routed through an
+    // untrusted connection.
+    if (port.sender !== undefined) {
+      if (port.sender.id !== chrome.runtime.id || port.sender.tab !== undefined) {
+        console.warn('[PortManager] Rejected untrusted port:', port.name, port.sender.url || port.sender.id || 'unknown');
+        port.disconnect();
+        return;
+      }
+    }
+
     const connectionId = `conn-${++this.connectionIdCounter}-${Date.now()}`;
     const connection: PortConnection = {
       port,
