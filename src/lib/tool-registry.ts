@@ -113,6 +113,7 @@ export class ToolRegistry {
 
         const url = args.url as string;
         const waitUntil = args.waitUntil as string || 'networkidle';
+        const origin = originOf(context.dom.url);
 
         // The bridge is the authoritative policy boundary for navigation.
         const decision = await authorizeViaBridge({
@@ -120,7 +121,7 @@ export class ToolRegistry {
           payload: {
             session_id: context.sessionId,
             action: 'navigate',
-            origin: originOf(context.dom.url),
+            origin,
             target: url,
             arguments: { url },
           },
@@ -136,14 +137,74 @@ export class ToolRegistry {
           };
         }
 
-        await chrome.tabs.update({ url });
+        // Honor the bridge's confirmation requirement (MOMO-022/023).
+        if (decision.requires_confirmation && !context.preAuthorized) {
+          return {
+            success: false,
+            error: 'Requires confirmation',
+            summary: 'Navigation requires confirmation',
+            navigationOccurred: false,
+            requiresConfirmation: true,
+            confirmationData: {
+              origin,
+              action: 'navigate',
+              target: url,
+              data: { url },
+              reversible: true,
+              riskClass: decision.risk_class,
+            },
+          };
+        }
 
-        // Wait for navigation
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // Navigate the *active* tab — a tabId is required (MOMO-119).
+        const navigationComplete = this.waitForNavigation(context.tabId, waitUntil);
+        try {
+          await chrome.tabs.update(context.tabId, { url });
+        } catch (e) {
+          return {
+            success: false,
+            error: String(e),
+            summary: `Navigation failed: ${e}`,
+            navigationOccurred: false,
+          };
+        }
+        await navigationComplete;
+
+        // Re-validate the *final* URL in case the navigation redirected to a
+        // different (possibly disallowed) origin (MOMO-085/089).
+        let finalUrl = url;
+        try {
+          const finalTab = await chrome.tabs.get(context.tabId);
+          finalUrl = finalTab?.url || url;
+        } catch {
+          // Tab gone; fall back to the requested URL.
+        }
+
+        if (originOf(finalUrl) !== origin) {
+          const redirectCheck = await authorizeViaBridge({
+            type: 'POLICY_CHECK',
+            payload: {
+              session_id: context.sessionId,
+              action: 'navigate',
+              origin,
+              target: finalUrl,
+              arguments: { url: finalUrl },
+            },
+          });
+          if (!redirectCheck || !redirectCheck.allowed) {
+            return {
+              success: false,
+              error: redirectCheck?.reason || 'Redirected to disallowed origin',
+              summary: `Navigation redirected to a blocked URL: ${finalUrl}`,
+              navigationOccurred: true,
+              requiresConfirmation: false,
+            };
+          }
+        }
 
         return {
           success: true,
-          summary: `Navigated to ${url}`,
+          summary: `Navigated to ${finalUrl}`,
           navigationOccurred: true,
           requiresConfirmation: false,
         };
@@ -326,33 +387,35 @@ export class ToolRegistry {
           };
         }
 
-        // Check if target is a sensitive field (password, credit card, etc.)
+        // Check if the target is a sensitive field, using the same detector as
+        // the bridge/human_type path (isSensitiveInput) rather than a weaker
+        // inline duplicate (MOMO-021/087/088).
         const sensitiveCheck = await chrome.scripting.executeScript({
           target: { tabId: context.tabId, allFrames: false },
           func: (sel: string) => {
             const el = document.querySelector(sel) as HTMLInputElement | HTMLTextAreaElement | null;
-            if (!el) return { isSensitive: false };
-            const type = (el.type || '').toLowerCase();
-            const autocomplete = (el.autocomplete || '').toLowerCase();
+            if (!el) return null;
             return {
-              isSensitive: type === 'password' || autocomplete.includes('cc-') || autocomplete.includes('secret'),
-              type,
-              autocomplete,
+              type: el.type || '',
+              autocomplete: el.autocomplete || '',
+              name: el.name || '',
+              id: el.id || '',
             };
           },
           args: [selector],
         });
 
-        const isSensitive = sensitiveCheck[0]?.result?.isSensitive;
+        const field = sensitiveCheck[0]?.result ?? null;
+        const isSensitive = field ? isSensitiveInput(field) : false;
         if (isSensitive && !context.preAuthorized) {
           return {
             success: false,
             error: 'Sensitive field detected - requires human confirmation',
-            summary: `Type blocked: sensitive field (${sensitiveCheck[0]?.result?.type})`,
+            summary: `Type blocked: sensitive field (${field?.type})`,
             navigationOccurred: false,
             requiresConfirmation: true,
             confirmationData: {
-              origin: new URL(context.dom.url).origin,
+              origin,
               action: 'type',
               target: selector,
               data: { selector, text: '[REDACTED]', clearFirst, pressEnter },
@@ -779,6 +842,36 @@ export class ToolRegistry {
           return { success: false, error: String(e), summary: 'Human type failed', navigationOccurred: false };
         }
       },
+    });
+  }
+
+  /**
+   * Wait for a tab to finish loading, honoring the requested waitUntil level.
+   * Resolves on `status === 'complete'` (plus a short settle for `networkidle`),
+   * or after the timeout — never rejects.
+   */
+  private waitForNavigation(tabId: number, waitUntil: string, timeoutMs = 20000): Promise<void> {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      };
+      const timer = setTimeout(finish, timeoutMs);
+      const listener = (tid: number, info: chrome.tabs.TabChangeInfo) => {
+        if (tid !== tabId || info.status !== 'complete') return;
+        if (waitUntil === 'networkidle') {
+          // Give async requests a short grace period after the load event.
+          clearTimeout(timer);
+          setTimeout(finish, 500);
+        } else {
+          finish();
+        }
+      };
+      chrome.tabs.onUpdated.addListener(listener);
     });
   }
 
