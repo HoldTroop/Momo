@@ -850,7 +850,7 @@ export class ToolRegistry {
         // input without an explicit `allowed` decision.
         const { decision, actionHash } = await authorizeViaBridge({
           type: 'SIMULATE_CLICK',
-          payload: { session_id: context.sessionId, origin, target, x, y },
+          payload: { session_id: context.sessionId, origin, target, x, y, page_revision: context.pageRevision },
         });
 
         if (!decision || !decision.allowed) {
@@ -938,7 +938,7 @@ export class ToolRegistry {
 
         const { decision, actionHash } = await authorizeViaBridge({
           type: 'SIMULATE_TYPE',
-          payload: { session_id: context.sessionId, origin, target, selector: null, text, field_is_sensitive: fieldIsSensitive },
+          payload: { session_id: context.sessionId, origin, target, selector: null, text, field_is_sensitive: fieldIsSensitive, page_revision: context.pageRevision },
         });
 
         if (!decision || !decision.allowed) {

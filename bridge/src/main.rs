@@ -25,10 +25,10 @@ enum BridgeRequest {
 
     // Input authorization (policy gate). The extension executes the authorized
     // action via chrome.debugger; the bridge never touches CDP directly.
-    SimulateClick { session_id: String, origin: String, target: String, x: f64, y: f64 },
-    SimulateType { session_id: String, origin: String, target: String, selector: Option<String>, text: String, field_is_sensitive: Option<bool> },
-    SimulateScroll { session_id: String, origin: String, target: String, x: f64, y: f64, delta_x: f64, delta_y: f64 },
-    SimulateMouseMove { session_id: String, origin: String, target: String, from_x: f64, from_y: f64, to_x: f64, to_y: f64 },
+    SimulateClick { session_id: String, origin: String, target: String, x: f64, y: f64, page_revision: u64 },
+    SimulateType { session_id: String, origin: String, target: String, selector: Option<String>, text: String, field_is_sensitive: Option<bool>, page_revision: u64 },
+    SimulateScroll { session_id: String, origin: String, target: String, x: f64, y: f64, delta_x: f64, delta_y: f64, page_revision: u64 },
+    SimulateMouseMove { session_id: String, origin: String, target: String, from_x: f64, from_y: f64, to_x: f64, to_y: f64, page_revision: u64 },
 
     // Policy Engine
     PolicyCheck { session_id: String, action: String, origin: String, target: String, arguments: serde_json::Value, page_revision: u64 },
@@ -164,19 +164,19 @@ impl BridgeServer {
                 Ok(BridgeResponse::Ok { request_id, data: result })
             }
 
-            BridgeRequest::SimulateClick { session_id, origin, target, x, y } => {
+            BridgeRequest::SimulateClick { session_id, origin, target, x, y, page_revision } => {
                 let data = self.authorize(PolicyRequest {
                     session_id,
                     action: "human_click".to_string(),
                     origin,
                     target,
                     arguments: serde_json::json!({ "x": x, "y": y }),
-                    page_revision: 0,
+                    page_revision,
                 })?;
                 Ok(BridgeResponse::Ok { request_id, data })
             }
 
-            BridgeRequest::SimulateType { session_id, origin, target, selector, text, field_is_sensitive } => {
+            BridgeRequest::SimulateType { session_id, origin, target, selector, text, field_is_sensitive, page_revision } => {
                 // Redact the typed text from the policy arguments and audit log;
                 // only the length is recorded so secrets never reach disk. The
                 // extension resolves the focused element and reports its
@@ -191,31 +191,31 @@ impl BridgeServer {
                         "text_length": text.len(),
                         "field_is_sensitive": field_is_sensitive,
                     }),
-                    page_revision: 0,
+                    page_revision,
                 })?;
                 Ok(BridgeResponse::Ok { request_id, data })
             }
 
-            BridgeRequest::SimulateScroll { session_id, origin, target, x, y, delta_x, delta_y } => {
+            BridgeRequest::SimulateScroll { session_id, origin, target, x, y, delta_x, delta_y, page_revision } => {
                 let data = self.authorize(PolicyRequest {
                     session_id,
                     action: "scroll".to_string(),
                     origin,
                     target,
                     arguments: serde_json::json!({ "x": x, "y": y, "delta_x": delta_x, "delta_y": delta_y }),
-                    page_revision: 0,
+                    page_revision,
                 })?;
                 Ok(BridgeResponse::Ok { request_id, data })
             }
 
-            BridgeRequest::SimulateMouseMove { session_id, origin, target, from_x, from_y, to_x, to_y } => {
+            BridgeRequest::SimulateMouseMove { session_id, origin, target, from_x, from_y, to_x, to_y, page_revision } => {
                 let data = self.authorize(PolicyRequest {
                     session_id,
                     action: "mouse_move".to_string(),
                     origin,
                     target,
                     arguments: serde_json::json!({ "from_x": from_x, "from_y": from_y, "to_x": to_x, "to_y": to_y }),
-                    page_revision: 0,
+                    page_revision,
                 })?;
                 Ok(BridgeResponse::Ok { request_id, data })
             }
