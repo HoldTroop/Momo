@@ -65,10 +65,15 @@ function App() {
       setTimeout(() => window.location.reload(), 3000);
     });
 
+    // The service worker broadcasts lifecycle and confirmation events via
+    // chrome.runtime.sendMessage (not the port), so listen there too.
+    chrome.runtime.onMessage.addListener(handlePortMessage);
+
     // Load sessions
     loadSessions();
 
     return () => {
+      chrome.runtime.onMessage.removeListener(handlePortMessage);
       port.disconnect();
     };
   }, []);

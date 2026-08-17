@@ -12,6 +12,7 @@ declare global {
 interface SessionRecord {
   sessionId: string;
   state: AgentState;
+  createdAt: number;
   updatedAt: number;
 }
 
@@ -83,9 +84,11 @@ class PersistenceManager {
   async saveSession(sessionId: string, state: AgentState): Promise<void> {
     if (!this.initialized) await this.init();
 
+    const existing = await this.db.sessions.get(sessionId);
     const record: SessionRecord = {
       sessionId,
       state: this.serializeState(this.redactStateForPersistence(state)),
+      createdAt: existing?.createdAt ?? Date.now(),
       updatedAt: Date.now(),
     };
 
@@ -99,11 +102,15 @@ class PersistenceManager {
     return record ? this.deserializeState(record.state) : null;
   }
 
-  async getAllSessions(): Promise<AgentState[]> {
+  async getAllSessions(): Promise<Array<{ state: AgentState; createdAt: number; updatedAt: number }>> {
     if (!this.initialized) await this.init();
 
     const records = await this.db.sessions.orderBy('updatedAt').reverse().toArray();
-    return records.map((r: SessionRecord) => this.deserializeState(r.state));
+    return records.map((r: SessionRecord) => ({
+      state: this.deserializeState(r.state),
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    }));
   }
 
   async deleteSession(sessionId: string): Promise<void> {

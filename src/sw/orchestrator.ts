@@ -135,6 +135,15 @@ export interface LayoutNode {
   children: LayoutNode[];
 }
 
+export interface SessionSummary {
+  sessionId: string;
+  goal: string;
+  status: 'idle' | 'running' | 'completed' | 'error';
+  createdAt: number;
+  updatedAt: number;
+  stepCount: number;
+}
+
 export class AgentOrchestrator {
   private persistence: PersistenceManager;
   private toolRegistry: ToolRegistry;
@@ -169,8 +178,8 @@ export class AgentOrchestrator {
     const sessions = await this.persistence.getAllSessions();
     const latest = sessions[0];
     if (latest) {
-      this.state = latest;
-      this.activeSessionId = latest.sessionId;
+      this.state = latest.state;
+      this.activeSessionId = latest.state.sessionId;
       console.log('[Orchestrator] Resumed session:', this.activeSessionId);
     }
   }
@@ -505,18 +514,31 @@ export class AgentOrchestrator {
   }
 
   private async escalateToHuman(step: PlanStep, result: ToolResult) {
-    // Send to side panel for human intervention
+    // Send to side panel for human intervention. Keep the payload aligned with
+    // requestConfirmation so the side panel can render a coherent prompt.
     chrome.runtime.sendMessage({
       type: 'HUMAN_INTERVENTION_REQUIRED',
       payload: {
         stepId: step.id,
         error: result.error,
-        context: step.action,
+        origin: this.getCurrentOrigin(),
+        action: step.action.name,
+        target: this.actionTarget(step.action),
+        data: step.action.arguments,
+        reversible: false,
+        riskClass: this.toolRegistry.get(step.action.name)?.policy.riskClass ?? 'write',
         actionHash: this.hashAction(step.action),
         pageRevision: this.state?.pageRevision || 0,
       },
     });
     this.abortController?.abort();
+  }
+
+  private actionTarget(action: ToolCall): string {
+    const args = action.arguments as Record<string, unknown>;
+    if (typeof args.selector === 'string') return args.selector;
+    if (typeof args.url === 'string') return args.url;
+    return JSON.stringify(args);
   }
 
   async abortTask(reason: string) {
@@ -526,10 +548,24 @@ export class AgentOrchestrator {
     chrome.runtime.sendMessage({ type: 'TASK_ABORTED', payload: { reason } });
   }
 
-  /** List persisted sessions (id + goal) for the side panel. */
-  async listSessions(): Promise<{ sessionId: string; goal: string }[]> {
+  /** List persisted sessions (full shape) for the side panel. */
+  async listSessions(): Promise<SessionSummary[]> {
     const sessions = await this.persistence.getAllSessions();
-    return sessions.map(s => ({ sessionId: s.sessionId, goal: s.goal }));
+    return sessions.map(s => ({
+      sessionId: s.state.sessionId,
+      goal: s.state.goal,
+      status: this.sessionStatus(s.state.sessionId),
+      createdAt: s.createdAt,
+      updatedAt: s.updatedAt,
+      stepCount: s.state.history.length,
+    }));
+  }
+
+  private sessionStatus(sessionId: string): SessionSummary['status'] {
+    if (sessionId === this.activeSessionId) {
+      return this.isRunning ? 'running' : 'idle';
+    }
+    return 'completed';
   }
 
   /** Delete a persisted session and clear it from memory if it is active. */
