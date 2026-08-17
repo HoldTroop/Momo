@@ -113,6 +113,9 @@ pub enum AuditOutcome {
     Failed,
     Escalated,
     Confirmed,
+    /// Authorized but not yet executed; the extension reports the real
+    /// `Success`/`Failed` via an ACTION_RESULT follow-up (MOMO-056).
+    Pending,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -480,6 +483,31 @@ impl PolicyEngine {
         Ok(())
     }
 
+    /// Update the outcome of a previously written audit entry once the extension
+    /// reports the real execution result. Correlated by `action_hash` (the content
+    /// hash of the original `PolicyRequest`) scoped to the session, so an
+    /// authorize-time `Pending`/`Escalated` can be corrected to `Success`/`Failed`
+    /// after the action actually runs (MOMO-056).
+    pub fn update_audit_outcome(
+        &self,
+        session_id: &str,
+        action_hash: &str,
+        outcome: AuditOutcome,
+        error: Option<String>,
+    ) -> Result<usize> {
+        let db = self.db.write();
+        let changed = db.execute(
+            "UPDATE audit_log SET outcome = ?, error = ? WHERE action_hash = ? AND session_id = ?",
+            params![
+                serde_json::to_string(&outcome)?,
+                error,
+                action_hash,
+                session_id,
+            ],
+        )?;
+        Ok(changed)
+    }
+
     pub fn get_audit_log(&self, session_id: Option<&str>, limit: usize) -> Result<Vec<AuditEntry>> {
         let db = self.db.read();
         let mut query = String::from("SELECT id, timestamp, session_id, action, origin, target, arguments, risk_class, outcome, action_hash, page_revision, user_confirmed, error FROM audit_log");
@@ -538,6 +566,7 @@ pub struct PolicyRequest {
     pub origin: String,
     pub target: String,
     pub arguments: Value,
+    pub page_revision: u64,
 }
 
 #[cfg(test)]
@@ -609,6 +638,7 @@ mod tests {
             origin: "https://evil.com".into(),
             target: "#password".into(),
             arguments: Value::Null,
+            page_revision: 0,
         };
         let decision = engine.evaluate(&request).expect("evaluate");
         assert!(!decision.allowed);
@@ -623,6 +653,7 @@ mod tests {
             origin: "https://example.com".into(),
             target: "#submit".into(),
             arguments: Value::Null,
+            page_revision: 0,
         };
         let decision = engine.evaluate(&request).expect("evaluate");
         assert!(!decision.allowed);
@@ -637,6 +668,7 @@ mod tests {
             origin: "https://example.com".into(),
             target: "focused-element".into(),
             arguments: serde_json::json!({ "selector": null, "text_length": 8, "field_is_sensitive": true }),
+            page_revision: 0,
         };
         let insensitive = PolicyRequest {
             session_id: "s1".into(),
@@ -644,6 +676,7 @@ mod tests {
             origin: "https://example.com".into(),
             target: "focused-element".into(),
             arguments: serde_json::json!({ "selector": null, "text_length": 8, "field_is_sensitive": false }),
+            page_revision: 0,
         };
         assert!(engine.evaluate(&sensitive).unwrap().requires_confirmation);
         assert!(!engine.evaluate(&insensitive).unwrap().requires_confirmation);
@@ -658,7 +691,51 @@ mod tests {
             origin: "https://example.com".into(),
             target: "focused-element".into(),
             arguments: serde_json::json!({ "selector": null, "text_length": 8 }),
+            page_revision: 0,
         };
         assert!(engine.evaluate(&request).unwrap().requires_confirmation);
+    }
+
+    #[test]
+    fn update_audit_outcome_overwrites_decision_outcome() {
+        // Unlike engine_with_allowlist (which unlinks the DB file immediately
+        // after save_config), this test must keep the file present so the SQLite
+        // connection remains writable for log_audit / update_audit_outcome.
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let path = std::env::temp_dir().join(format!(
+            "momo-policy-update-test-{}-{}.db",
+            std::process::id(),
+            n
+        ));
+        let engine = PolicyEngine::new(path.clone()).expect("open test db");
+
+        let entry = AuditEntry {
+            id: 0,
+            timestamp: Utc::now(),
+            session_id: "s1".into(),
+            action: "navigate".into(),
+            origin: "https://example.com".into(),
+            target: "https://example.com".into(),
+            arguments: Value::Null,
+            risk_class: RiskClass::Navigation,
+            outcome: AuditOutcome::Pending,
+            action_hash: "h1".into(),
+            page_revision: 7,
+            user_confirmed: false,
+            error: None,
+        };
+        engine.log_audit(&entry).expect("log audit");
+
+        let changed = engine
+            .update_audit_outcome("s1", "h1", AuditOutcome::Failed, Some("boom".into()))
+            .expect("update");
+        assert_eq!(changed, 1);
+
+        let log = engine.get_audit_log(Some("s1"), 10).expect("read");
+        assert_eq!(log.len(), 1);
+        assert!(matches!(&log[0].outcome, AuditOutcome::Failed));
+        assert_eq!(log[0].error.as_deref(), Some("boom"));
+
+        let _ = std::fs::remove_file(path);
     }
 }

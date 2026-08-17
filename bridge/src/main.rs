@@ -31,7 +31,10 @@ enum BridgeRequest {
     SimulateMouseMove { session_id: String, origin: String, target: String, from_x: f64, from_y: f64, to_x: f64, to_y: f64 },
 
     // Policy Engine
-    PolicyCheck { session_id: String, action: String, origin: String, target: String, arguments: serde_json::Value },
+    PolicyCheck { session_id: String, action: String, origin: String, target: String, arguments: serde_json::Value, page_revision: u64 },
+    // The extension reports the real execution outcome after the action runs so
+    // the audit entry written at decision time can be corrected (MOMO-056).
+    ActionResult { session_id: String, action_hash: String, outcome: String, error: Option<String> },
     PolicyGetConfig,
     PolicySetConfig { config: PolicyConfig },
     PolicyGetAuditLog { session_id: Option<String>, limit: usize },
@@ -86,9 +89,24 @@ impl BridgeServer {
     }
 
     /// Evaluate the policy engine for an action and write the audit entry.
-    /// Returns the serialized `PolicyDecision` for the caller.
+    ///
+    /// The entry records the *decision*, not the execution result: `Denied` when
+    /// the policy gate refuses, `Escalated` when a human confirmation is pending,
+    /// and `Pending` when the action is authorized but not yet executed. The
+    /// extension later reports the real outcome via `ActionResult`, which calls
+    /// `update_audit_outcome` to correct the entry (MOMO-056). Returns both the
+    /// decision and the `action_hash` so the caller can correlate the follow-up.
     fn authorize(&self, request: PolicyRequest) -> Result<serde_json::Value> {
         let decision = self.policy_engine.evaluate(&request)?;
+        let action_hash = format!("{:x}", Md5::digest(serde_json::to_string(&request)?.as_bytes()));
+
+        let outcome = if !decision.allowed {
+            policy::AuditOutcome::Denied
+        } else if decision.requires_confirmation {
+            policy::AuditOutcome::Escalated
+        } else {
+            policy::AuditOutcome::Pending
+        };
 
         let audit_entry = policy::AuditEntry {
             id: 0, // assigned by the DB
@@ -99,23 +117,18 @@ impl BridgeServer {
             target: request.target.clone(),
             arguments: request.arguments.clone(),
             risk_class: decision.risk_class.clone(),
-            outcome: if decision.allowed {
-                if decision.requires_confirmation {
-                    policy::AuditOutcome::Confirmed
-                } else {
-                    policy::AuditOutcome::Success
-                }
-            } else {
-                policy::AuditOutcome::Denied
-            },
-            action_hash: format!("{:x}", Md5::digest(serde_json::to_string(&request)?.as_bytes())),
-            page_revision: 0,
+            outcome,
+            action_hash: action_hash.clone(),
+            page_revision: request.page_revision,
             user_confirmed: false,
             error: decision.reason.clone(),
         };
 
         let _ = self.policy_engine.log_audit(&audit_entry);
-        Ok(serde_json::to_value(decision)?)
+        Ok(serde_json::json!({
+            "decision": decision,
+            "action_hash": action_hash,
+        }))
     }
 
     async fn handle_request(&self, request: BridgeRequest) -> Result<BridgeResponse> {
@@ -158,6 +171,7 @@ impl BridgeServer {
                     origin,
                     target,
                     arguments: serde_json::json!({ "x": x, "y": y }),
+                    page_revision: 0,
                 })?;
                 Ok(BridgeResponse::Ok { request_id, data })
             }
@@ -177,6 +191,7 @@ impl BridgeServer {
                         "text_length": text.len(),
                         "field_is_sensitive": field_is_sensitive,
                     }),
+                    page_revision: 0,
                 })?;
                 Ok(BridgeResponse::Ok { request_id, data })
             }
@@ -188,6 +203,7 @@ impl BridgeServer {
                     origin,
                     target,
                     arguments: serde_json::json!({ "x": x, "y": y, "delta_x": delta_x, "delta_y": delta_y }),
+                    page_revision: 0,
                 })?;
                 Ok(BridgeResponse::Ok { request_id, data })
             }
@@ -199,13 +215,28 @@ impl BridgeServer {
                     origin,
                     target,
                     arguments: serde_json::json!({ "from_x": from_x, "from_y": from_y, "to_x": to_x, "to_y": to_y }),
+                    page_revision: 0,
                 })?;
                 Ok(BridgeResponse::Ok { request_id, data })
             }
 
-            BridgeRequest::PolicyCheck { session_id, action, origin, target, arguments } => {
-                let data = self.authorize(PolicyRequest { session_id, action, origin, target, arguments })?;
+            BridgeRequest::PolicyCheck { session_id, action, origin, target, arguments, page_revision } => {
+                let data = self.authorize(PolicyRequest { session_id, action, origin, target, arguments, page_revision })?;
                 Ok(BridgeResponse::Ok { request_id, data })
+            }
+
+            BridgeRequest::ActionResult { session_id, action_hash, outcome, error } => {
+                let parsed = match outcome.as_str() {
+                    "success" => policy::AuditOutcome::Success,
+                    // Unknown / non-success outcomes are recorded as failed so a
+                    // malformed report can't inflate the audit log's success count.
+                    _ => policy::AuditOutcome::Failed,
+                };
+                let updated = self.policy_engine.update_audit_outcome(&session_id, &action_hash, parsed, error)?;
+                Ok(BridgeResponse::Ok {
+                    request_id,
+                    data: serde_json::json!({ "updated": updated }),
+                })
             }
 
             BridgeRequest::PolicyGetConfig => {

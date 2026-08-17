@@ -52,14 +52,47 @@ interface PolicyDecision {
   confirmation_data: { origin: string; action: string; target: string; data: unknown; reversible: boolean; risk_class: string } | null;
 }
 
+/** Bridge authorize response: the decision plus the `action_hash` for result reporting. */
+interface AuthResult {
+  decision: PolicyDecision | null;
+  actionHash: string | null;
+}
+
 /** Send an authorization request to the bridge and return its policy decision (null if unreachable). */
-async function authorizeViaBridge(request: Record<string, unknown>): Promise<PolicyDecision | null> {
+async function authorizeViaBridge(request: Record<string, unknown>): Promise<AuthResult> {
   try {
     const response = await chrome.runtime.sendNativeMessage('agent.bridge', request);
-    return (response?.payload?.data as PolicyDecision) ?? null;
+    const data = response?.payload?.data as { decision?: PolicyDecision; action_hash?: string } | null;
+    return {
+      decision: data?.decision ?? null,
+      actionHash: data?.action_hash ?? null,
+    };
   } catch (e) {
     console.warn('[ToolRegistry] Bridge authorize failed:', e);
-    return null;
+    return { decision: null, actionHash: null };
+  }
+}
+
+/**
+ * Report the real execution outcome back to the bridge so the audit entry
+ * written at decision time can be corrected from `Pending`/`Escalated` to
+ * `Success`/`Failed` (MOMO-056). Best-effort: audit reporting must never block
+ * or fail the action itself.
+ */
+async function reportActionResult(sessionId: string, actionHash: string | null, success: boolean, error?: string): Promise<void> {
+  if (!actionHash) return;
+  try {
+    await chrome.runtime.sendNativeMessage('agent.bridge', {
+      type: 'ACTION_RESULT',
+      payload: {
+        session_id: sessionId,
+        action_hash: actionHash,
+        outcome: success ? 'success' : 'failed',
+        error: error ?? null,
+      },
+    });
+  } catch (e) {
+    console.warn('[ToolRegistry] Report action result failed:', e);
   }
 }
 
@@ -121,7 +154,7 @@ export class ToolRegistry {
         const origin = originOf(context.dom.url);
 
         // The bridge is the authoritative policy boundary for navigation.
-        const decision = await authorizeViaBridge({
+        const { decision, actionHash } = await authorizeViaBridge({
           type: 'POLICY_CHECK',
           payload: {
             session_id: context.sessionId,
@@ -129,6 +162,7 @@ export class ToolRegistry {
             origin,
             target: url,
             arguments: { url },
+            page_revision: context.pageRevision,
           },
         });
 
@@ -166,6 +200,7 @@ export class ToolRegistry {
         try {
           await chrome.tabs.update(context.tabId, { url });
         } catch (e) {
+          await reportActionResult(context.sessionId, actionHash, false, String(e));
           return {
             success: false,
             error: String(e),
@@ -186,7 +221,7 @@ export class ToolRegistry {
         }
 
         if (originOf(finalUrl) !== origin) {
-          const redirectCheck = await authorizeViaBridge({
+          const { decision: redirectCheck } = await authorizeViaBridge({
             type: 'POLICY_CHECK',
             payload: {
               session_id: context.sessionId,
@@ -194,9 +229,11 @@ export class ToolRegistry {
               origin,
               target: finalUrl,
               arguments: { url: finalUrl },
+              page_revision: context.pageRevision,
             },
           });
           if (!redirectCheck || !redirectCheck.allowed) {
+            await reportActionResult(context.sessionId, actionHash, false, redirectCheck?.reason || 'Redirected to disallowed origin');
             return {
               success: false,
               error: redirectCheck?.reason || 'Redirected to disallowed origin',
@@ -206,6 +243,8 @@ export class ToolRegistry {
             };
           }
         }
+
+        await reportActionResult(context.sessionId, actionHash, true);
 
         return {
           success: true,
@@ -244,7 +283,7 @@ export class ToolRegistry {
         const origin = originOf(context.dom.url);
 
         // The bridge is the authoritative policy gate for write actions.
-        const decision = await authorizeViaBridge({
+        const { decision, actionHash } = await authorizeViaBridge({
           type: 'POLICY_CHECK',
           payload: {
             session_id: context.sessionId,
@@ -252,6 +291,7 @@ export class ToolRegistry {
             origin,
             target: selector,
             arguments: { selector },
+            page_revision: context.pageRevision,
           },
         });
 
@@ -355,6 +395,7 @@ export class ToolRegistry {
 
         const res = probe[0]?.result;
         if (!res || !res.success) {
+          await reportActionResult(context.sessionId, actionHash, false, res?.error || 'Click failed');
           return { success: false, error: res?.error || 'Click failed', summary: `Click failed: ${res?.error}`, navigationOccurred: false };
         }
 
@@ -383,6 +424,7 @@ export class ToolRegistry {
 
         const sessionId = await context.getCdpSession();
         if (!sessionId) {
+          await reportActionResult(context.sessionId, actionHash, false, 'CDP session unavailable');
           return { success: false, error: 'CDP session unavailable', summary: 'Click failed: no CDP session', navigationOccurred: false };
         }
 
@@ -392,8 +434,11 @@ export class ToolRegistry {
           await cdpAdapter.dispatchMouseEvent(sessionId, 'mousePressed', x, y);
           await cdpAdapter.dispatchMouseEvent(sessionId, 'mouseReleased', x, y);
         } catch (e) {
+          await reportActionResult(context.sessionId, actionHash, false, String(e));
           return { success: false, error: String(e), summary: 'Click failed', navigationOccurred: false };
         }
+
+        await reportActionResult(context.sessionId, actionHash, true);
 
         return {
           success: true,
@@ -436,7 +481,7 @@ export class ToolRegistry {
         // The bridge is the authoritative policy gate for write actions. The
         // typed text is redacted to its length so the secret never reaches the
         // audit log (mirroring the bridge's own SimulateType handling).
-        const decision = await authorizeViaBridge({
+        const { decision, actionHash } = await authorizeViaBridge({
           type: 'POLICY_CHECK',
           payload: {
             session_id: context.sessionId,
@@ -444,6 +489,7 @@ export class ToolRegistry {
             origin,
             target: selector,
             arguments: { selector, text_length: text.length },
+            page_revision: context.pageRevision,
           },
         });
 
@@ -507,6 +553,7 @@ export class ToolRegistry {
 
         const res = probe[0]?.result;
         if (!res || !res.success) {
+          await reportActionResult(context.sessionId, actionHash, false, res?.error || 'Type failed');
           return { success: false, error: res?.error || 'Type failed', summary: `Type failed: ${res?.error}`, navigationOccurred: false };
         }
 
@@ -534,6 +581,7 @@ export class ToolRegistry {
 
         const sessionId = await context.getCdpSession();
         if (!sessionId) {
+          await reportActionResult(context.sessionId, actionHash, false, 'CDP session unavailable');
           return { success: false, error: 'CDP session unavailable', summary: 'Type failed: no CDP session', navigationOccurred: false };
         }
 
@@ -545,9 +593,11 @@ export class ToolRegistry {
             await cdpAdapter.dispatchKeyEvent(sessionId, 'Enter', 'keyDown');
             await cdpAdapter.dispatchKeyEvent(sessionId, 'Enter', 'keyUp');
           }
+          await reportActionResult(context.sessionId, actionHash, true);
           // Never echo the typed text into the summary (it flows into history/persistence).
           return { success: true, summary: `Typed into ${selector}`, navigationOccurred: false };
         } catch (e) {
+          await reportActionResult(context.sessionId, actionHash, false, String(e));
           return { success: false, error: String(e), summary: 'Type failed', navigationOccurred: false };
         }
       },
@@ -798,7 +848,7 @@ export class ToolRegistry {
 
         // The bridge is the authoritative policy gate: never dispatch a trusted
         // input without an explicit `allowed` decision.
-        const decision = await authorizeViaBridge({
+        const { decision, actionHash } = await authorizeViaBridge({
           type: 'SIMULATE_CLICK',
           payload: { session_id: context.sessionId, origin, target, x, y },
         });
@@ -826,14 +876,17 @@ export class ToolRegistry {
 
         const sessionId = await context.getCdpSession();
         if (!sessionId) {
+          await reportActionResult(context.sessionId, actionHash, false, 'CDP session unavailable');
           return { success: false, error: 'CDP session unavailable', summary: 'Human click failed: no CDP session', navigationOccurred: false };
         }
 
         try {
           await cdpAdapter.dispatchMouseEvent(sessionId, 'mousePressed', x, y);
           await cdpAdapter.dispatchMouseEvent(sessionId, 'mouseReleased', x, y);
+          await reportActionResult(context.sessionId, actionHash, true);
           return { success: true, summary: `Human click at (${x}, ${y})`, navigationOccurred: false };
         } catch (e) {
+          await reportActionResult(context.sessionId, actionHash, false, String(e));
           return { success: false, error: String(e), summary: 'Human click failed', navigationOccurred: false };
         }
       },
@@ -883,7 +936,7 @@ export class ToolRegistry {
         const focusedField = focusedCheck[0]?.result;
         const fieldIsSensitive = focusedField ? isSensitiveInput(focusedField) : true;
 
-        const decision = await authorizeViaBridge({
+        const { decision, actionHash } = await authorizeViaBridge({
           type: 'SIMULATE_TYPE',
           payload: { session_id: context.sessionId, origin, target, selector: null, text, field_is_sensitive: fieldIsSensitive },
         });
@@ -911,14 +964,17 @@ export class ToolRegistry {
 
         const sessionId = await context.getCdpSession();
         if (!sessionId) {
+          await reportActionResult(context.sessionId, actionHash, false, 'CDP session unavailable');
           return { success: false, error: 'CDP session unavailable', summary: 'Human type failed: no CDP session', navigationOccurred: false };
         }
 
         try {
           await cdpAdapter.insertText(sessionId, text);
+          await reportActionResult(context.sessionId, actionHash, true);
           // Never echo the typed text into the summary (it flows into history/persistence).
           return { success: true, summary: 'Human typed into focused element', navigationOccurred: false };
         } catch (e) {
+          await reportActionResult(context.sessionId, actionHash, false, String(e));
           return { success: false, error: String(e), summary: 'Human type failed', navigationOccurred: false };
         }
       },
