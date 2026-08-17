@@ -24,7 +24,7 @@ declare const chrome: {
 
 declare namespace chrome.debugger {
   interface TargetInfo {
-    targetId: string;
+    id: string;
     title?: string;
     url?: string;
     type?: string;
@@ -60,10 +60,14 @@ class CdpAdapter {
   private eventListeners: Map<string, Set<(method: string, params: any) => void>> = new Map();
 
   async getTargets(): Promise<CdpTarget[]> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       chrome.debugger.getTargets((targets) => {
-        const result: CdpTarget[] = targets.map(t => ({
-          targetId: t.targetId,
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        const result: CdpTarget[] = (targets || []).map(t => ({
+          targetId: t.id,
           title: t.title || '',
           url: t.url || '',
           type: t.type || '',
@@ -94,6 +98,9 @@ class CdpAdapter {
             }
           },
           onDetach: (reason) => {
+            // Remove the per-session listeners so they don't leak (or double-fire
+            // after a later re-attach of the same target), then drop the session.
+            this.removeSessionListeners(session);
             this.sessions.delete(sessionId);
             console.log('[CDP Adapter] Session detached:', sessionId, reason);
           },
@@ -107,9 +114,9 @@ class CdpAdapter {
             session.onEvent(method, params);
           }
         };
-        session._detachListener = (source) => {
+        session._detachListener = (source, reason) => {
           if (source.targetId === targetId) {
-            session.onDetach('detached');
+            session.onDetach(reason);
           }
         };
 
@@ -126,20 +133,29 @@ class CdpAdapter {
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
-    // Remove the per-session listeners so they don't accumulate across attaches.
+    return new Promise((resolve, reject) => {
+      chrome.debugger.detach({ targetId: session.targetId }, () => {
+        if (chrome.runtime.lastError) {
+          // Keep the session entry and listeners on failure so a later retry can
+          // still find and clean up the session.
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        this.removeSessionListeners(session);
+        this.sessions.delete(sessionId);
+        resolve();
+      });
+    });
+  }
+
+  /** Remove the per-session onEvent/onDetach listeners so they don't accumulate. */
+  private removeSessionListeners(session: CdpSession): void {
     if (session._eventListener) {
       chrome.debugger.onEvent.removeListener(session._eventListener);
     }
     if (session._detachListener) {
       chrome.debugger.onDetach.removeListener(session._detachListener);
     }
-
-    return new Promise((resolve) => {
-      chrome.debugger.detach({ targetId: session.targetId }, () => {
-        this.sessions.delete(sessionId);
-        resolve();
-      });
-    });
   }
 
   async sendCommand<T = any>(sessionId: string, domain: string, command: string, params: any = {}): Promise<T> {
