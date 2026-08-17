@@ -33,6 +33,9 @@ export class TaskQueue {
 
     // Recover tasks stranded in `running` from a prior service-worker lifetime.
     await this.persistence.requeueStaleRunningTasks(sessionId, Date.now() - 60_000);
+    // Expire pending tasks whose deadline has passed so they stop reporting as
+    // `pending` forever and can no longer starve the queue (MOMO-071).
+    await this.persistence.sweepExpiredPendingTasks(sessionId);
 
     this.processorInterval = window.setInterval(async () => {
       const currentSessionId = this.sessionId;
@@ -86,9 +89,13 @@ export class TaskQueue {
         retryPolicy.maxDelayMs
       );
 
-      // Re-queue with delay
+      // Re-queue with delay, extending the deadline so the retry isn't
+      // immediately re-expired by the sweep or the deadline filter (MOMO-071).
       setTimeout(async () => {
-        await this.persistence.updateTask(entry.id, { status: 'pending' });
+        await this.persistence.updateTask(entry.id, {
+          status: 'pending',
+          deadline: Date.now() + retryPolicy.maxDelayMs,
+        });
       }, delay);
     }
   }

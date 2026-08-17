@@ -233,13 +233,27 @@ class PersistenceManager {
   async getNextPendingTask(sessionId: string): Promise<TaskQueueEntry | null> {
     if (!this.initialized) await this.init();
 
-    const record = await this.db.tasks
+    // Filter in-memory, then sort once by descending priority (sortBy is always
+    // ascending, so a preceding .sortBy('priority') was a wasted pass — MOMO-115).
+    const pending: TaskRecord[] = await this.db.tasks
       .where('sessionId').equals(sessionId)
       .and((r: TaskRecord) => r.status === 'pending' && r.deadline > Date.now())
-      .sortBy('priority')
-      .then((arr: TaskRecord[]) => arr.sort((a, b) => b.priority - a.priority)[0] || null);
+      .toArray();
 
+    const record = pending.sort((a, b) => b.priority - a.priority)[0] || null;
     return record ? this.deserializeTask(record) : null;
+  }
+
+  /** Mark pending tasks whose deadline has elapsed as `dead` so they don't linger forever. */
+  async sweepExpiredPendingTasks(sessionId: string, now: number = Date.now()): Promise<number> {
+    if (!this.initialized) await this.init();
+
+    return this.db.tasks
+      .where('sessionId').equals(sessionId)
+      .filter((r: TaskRecord) => r.status === 'pending' && r.deadline <= now)
+      .modify((r: TaskRecord) => {
+        r.status = 'dead';
+      });
   }
 
   async getTasksByStatus(sessionId: string, status: TaskStatus): Promise<TaskQueueEntry[]> {
