@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: ❓ Question / discussion
-    url: https://github.com/NoteBag/Momo/discussions
+    url: https://github.com/HoldTroop/Momo/discussions
     about: Please ask questions and start discussions here instead of opening an issue.
   - name: 📖 Contributing guide
-    url: https://github.com/NoteBag/Momo/blob/main/CONTRIBUTING.md
+    url: https://github.com/HoldTroop/Momo/blob/main/CONTRIBUTING.md
     about: Read the contribution guide before opening a PR.
