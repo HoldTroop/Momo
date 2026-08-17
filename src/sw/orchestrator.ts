@@ -548,6 +548,30 @@ export class AgentOrchestrator {
     chrome.runtime.sendMessage({ type: 'TASK_ABORTED', payload: { reason } });
   }
 
+  /**
+   * Tear down cleanly when the service worker is suspended. The abort and cache
+   * invalidation happen synchronously (before any await) because neither
+   * chrome.runtime.onSuspend nor beforeunload offers waitUntil(); the async
+   * detach/persist may not finish before the worker is killed.
+   */
+  async suspend(): Promise<void> {
+    this.isRunning = false;
+    this.abortController?.abort();
+
+    const sessionId = this.cdpSessionId;
+    this.cdpSessionId = null;
+
+    if (sessionId) {
+      try {
+        await this.detachCdp(sessionId);
+      } catch (e) {
+        console.error('[Orchestrator] CDP detach on suspend failed:', e);
+      }
+    }
+
+    await this.persistState();
+  }
+
   /** List persisted sessions (full shape) for the side panel. */
   async listSessions(): Promise<SessionSummary[]> {
     const sessions = await this.persistence.getAllSessions();
@@ -639,6 +663,12 @@ export class AgentOrchestrator {
 
   async detachCdp(sessionId: string): Promise<void> {
     await cdpAdapter.detach(sessionId);
+
+    // Invalidate the cached session id so a subsequent getOrCreateCdpSession
+    // re-attaches instead of reusing a stale session.
+    if (this.cdpSessionId === sessionId) {
+      this.cdpSessionId = null;
+    }
 
     // Notify content script
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });

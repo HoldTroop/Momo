@@ -64,12 +64,12 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 chrome.runtime.onSuspend.addListener(() => {
-  console.log('[SW] Suspending, persisting state...');
-  orchestrator.persistState();
+  console.log('[SW] Suspending, aborting task and detaching CDP...');
+  orchestrator.suspend();
 });
 
 self.addEventListener('beforeunload', () => {
-  orchestrator.persistState();
+  orchestrator.suspend();
 });
 
 initialize();
