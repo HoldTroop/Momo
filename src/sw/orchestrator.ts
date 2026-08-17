@@ -168,6 +168,15 @@ export class AgentOrchestrator {
     this.toolRegistry = new ToolRegistry();
     this.domCompressor = new DomCompressor();
     this.taskQueue = new TaskQueue(persistence);
+
+    // When a CDP session detaches (tab close, navigation, external debugger),
+    // drop the cached session id so the next use re-attaches instead of reusing
+    // a stale session (MOMO-038/050).
+    cdpAdapter.onSessionDetached((sessionId) => {
+      if (this.cdpSessionId === sessionId) {
+        this.cdpSessionId = null;
+      }
+    });
   }
 
   async init() {
@@ -634,6 +643,7 @@ export class AgentOrchestrator {
       this.state.status = markError ? 'error' : 'idle';
       this.state.error = markError ? reason : null;
     }
+    await this.detachCdpIfAttached();
     await this.persistState();
     chrome.runtime.sendMessage({ type: 'TASK_ABORTED', payload: { reason } });
   }
@@ -711,6 +721,7 @@ export class AgentOrchestrator {
       this.state.error = null;
     }
     chrome.runtime.sendMessage({ type: 'TASK_COMPLETED', payload: { sessionId: this.activeSessionId } });
+    await this.detachCdpIfAttached();
     await this.persistState();
   }
 
@@ -741,19 +752,27 @@ export class AgentOrchestrator {
   // CDP attachment for AX tree extraction
   async attachCdpToActiveTab(): Promise<string | null> {
     try {
-      const targets = await cdpAdapter.getTargets();
-      const activeTab = targets.find(t => t.type === 'page' && t.url && !t.attached);
-      if (!activeTab) {
-        console.log('[Orchestrator] No suitable CDP target found');
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const activeTab = tabs[0];
+      if (!activeTab?.url) {
+        console.log('[Orchestrator] No active tab');
         return null;
       }
 
-      const sessionId = await cdpAdapter.attach(activeTab.targetId);
+      // Attach the debugger target that matches the *active* tab (by URL), not
+      // the first unattached page target, which may be a background tab.
+      const targets = await cdpAdapter.getTargets();
+      const target = targets.find(t => t.type === 'page' && t.url === activeTab.url);
+      if (!target) {
+        console.log('[Orchestrator] No CDP target for active tab:', activeTab.url);
+        return null;
+      }
+
+      const sessionId = await cdpAdapter.attach(target.targetId);
 
       // Notify content script of CDP attachment
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tabs[0]?.id) {
-        chrome.tabs.sendMessage(tabs[0].id!, {
+      if (activeTab.id) {
+        chrome.tabs.sendMessage(activeTab.id, {
           type: 'CDP_ATTACHED',
           payload: { sessionId }
         });
@@ -779,6 +798,18 @@ export class AgentOrchestrator {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tabs[0]?.id) {
       chrome.tabs.sendMessage(tabs[0].id!, { type: 'CDP_DETACHED' });
+    }
+  }
+
+  /** Detach any active CDP session, tolerating failure (e.g. already detached). */
+  private async detachCdpIfAttached(): Promise<void> {
+    const sessionId = this.cdpSessionId;
+    if (!sessionId) return;
+    this.cdpSessionId = null;
+    try {
+      await this.detachCdp(sessionId);
+    } catch (e) {
+      console.error('[Orchestrator] CDP detach failed:', e);
     }
   }
 
@@ -828,6 +859,15 @@ export class AgentOrchestrator {
       // tab loads don't falsely invalidate an in-flight human confirmation.
       if (tab.active) {
         this.state.pageRevision++;
+        // Navigation may invalidate the CDP target id — drop the cached session
+        // so the next use re-attaches to the current target.
+        if (this.cdpSessionId) {
+          const sid = this.cdpSessionId;
+          this.cdpSessionId = null;
+          void this.detachCdp(sid).catch(e => {
+            console.error('[Orchestrator] CDP detach after navigation failed:', e);
+          });
+        }
       }
     }
   }

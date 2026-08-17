@@ -58,6 +58,7 @@ class CdpAdapter {
   private sessions: Map<string, CdpSession> = new Map();
   private targetListeners: Map<string, (targetInfo: chrome.debugger.TargetInfo) => void> = new Map();
   private eventListeners: Map<string, Set<(method: string, params: any) => void>> = new Map();
+  private sessionDetachedCallbacks: Set<(sessionId: string) => void> = new Set();
 
   async getTargets(): Promise<CdpTarget[]> {
     return new Promise((resolve, reject) => {
@@ -102,6 +103,7 @@ class CdpAdapter {
             // after a later re-attach of the same target), then drop the session.
             this.removeSessionListeners(session);
             this.sessions.delete(sessionId);
+            this.sessionDetachedCallbacks.forEach(cb => cb(sessionId));
             console.log('[CDP Adapter] Session detached:', sessionId, reason);
           },
         };
@@ -146,6 +148,12 @@ class CdpAdapter {
         resolve();
       });
     });
+  }
+
+  /** Subscribe to session detach events (external or internal) to invalidate caches. */
+  onSessionDetached(callback: (sessionId: string) => void): () => void {
+    this.sessionDetachedCallbacks.add(callback);
+    return () => this.sessionDetachedCallbacks.delete(callback);
   }
 
   /** Remove the per-session onEvent/onDetach listeners so they don't accumulate. */
