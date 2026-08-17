@@ -168,6 +168,47 @@ export class ToolRegistry {
         deductTokens(context.tokenBudget, 10);
 
         const selector = args.selector as string;
+        const origin = originOf(context.dom.url);
+
+        // The bridge is the authoritative policy gate for write actions.
+        const decision = await authorizeViaBridge({
+          type: 'POLICY_CHECK',
+          payload: {
+            session_id: context.sessionId,
+            action: 'click',
+            origin,
+            target: selector,
+            arguments: { selector },
+          },
+        });
+
+        if (!decision || !decision.allowed) {
+          return {
+            success: false,
+            error: decision?.reason || 'Bridge unreachable',
+            summary: `Click blocked: ${decision?.reason || 'bridge unreachable'}`,
+            navigationOccurred: false,
+            requiresConfirmation: decision?.requires_confirmation,
+          };
+        }
+
+        if (decision.requires_confirmation) {
+          return {
+            success: false,
+            error: 'Requires confirmation',
+            summary: 'Click requires confirmation',
+            navigationOccurred: false,
+            requiresConfirmation: true,
+            confirmationData: {
+              origin,
+              action: 'click',
+              target: selector,
+              data: { selector },
+              reversible: false,
+              riskClass: decision.risk_class,
+            },
+          };
+        }
 
         const result = await chrome.scripting.executeScript({
           target: { tabId: context.tabId, allFrames: false },
@@ -233,6 +274,49 @@ export class ToolRegistry {
         const text = args.text as string;
         const clearFirst = args.clearFirst as boolean ?? true;
         const pressEnter = args.pressEnter as boolean ?? false;
+        const origin = originOf(context.dom.url);
+
+        // The bridge is the authoritative policy gate for write actions. The
+        // typed text is redacted to its length so the secret never reaches the
+        // audit log (mirroring the bridge's own SimulateType handling).
+        const decision = await authorizeViaBridge({
+          type: 'POLICY_CHECK',
+          payload: {
+            session_id: context.sessionId,
+            action: 'type',
+            origin,
+            target: selector,
+            arguments: { selector, text_length: text.length },
+          },
+        });
+
+        if (!decision || !decision.allowed) {
+          return {
+            success: false,
+            error: decision?.reason || 'Bridge unreachable',
+            summary: `Type blocked: ${decision?.reason || 'bridge unreachable'}`,
+            navigationOccurred: false,
+            requiresConfirmation: decision?.requires_confirmation,
+          };
+        }
+
+        if (decision.requires_confirmation) {
+          return {
+            success: false,
+            error: 'Requires confirmation',
+            summary: 'Type requires confirmation',
+            navigationOccurred: false,
+            requiresConfirmation: true,
+            confirmationData: {
+              origin,
+              action: 'type',
+              target: selector,
+              data: { selector, text: '[REDACTED]', clearFirst, pressEnter },
+              reversible: false,
+              riskClass: decision.risk_class,
+            },
+          };
+        }
 
         // Check if target is a sensitive field (password, credit card, etc.)
         const sensitiveCheck = await chrome.scripting.executeScript({
