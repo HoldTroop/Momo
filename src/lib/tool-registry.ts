@@ -8,7 +8,6 @@ export interface ToolPolicy {
   riskClass: RiskClass;
   requiresConfirmation: boolean;
   allowedOrigins?: string[];
-  dataClassification: 'public' | 'internal' | 'confidential' | 'restricted';
   reversible: boolean;
   idempotent: boolean;
   tokenCost: number;
@@ -103,7 +102,6 @@ export class ToolRegistry {
         riskClass: 'navigation',
         requiresConfirmation: false, // allowlist check is the gate
         allowedOrigins: [], // populated from context
-        dataClassification: 'public',
         reversible: true, // can navigate back
         idempotent: true,
         tokenCost: 100,
@@ -228,7 +226,6 @@ export class ToolRegistry {
       policy: {
         riskClass: 'write',
         requiresConfirmation: false,
-        dataClassification: 'public',
         reversible: false, // clicks are generally not reversible
         idempotent: false,
         tokenCost: 10,
@@ -237,6 +234,8 @@ export class ToolRegistry {
         deductTokens(context.tokenBudget, 10);
 
         const selector = args.selector as string;
+        const xpath = args.xpath as string | undefined;
+        const textHint = args.text as string | undefined;
         const origin = originOf(context.dom.url);
 
         // The bridge is the authoritative policy gate for write actions.
@@ -280,31 +279,98 @@ export class ToolRegistry {
         }
 
         // Resolve the element's clickable center via the content script (read-only),
-        // then dispatch a trusted CDP mouse click at those coordinates instead of a
+        // honoring the optional xpath/text disambiguation params (MOMO-077), then
+        // dispatch a trusted CDP mouse click at those coordinates instead of a
         // synthetic el.click() (MOMO-019/080).
         const probe = await chrome.scripting.executeScript({
           target: { tabId: context.tabId, allFrames: false },
-          func: (sel: string) => {
-            const el = document.querySelector(sel) as HTMLElement | null;
+          func: (sel: string, xp: string | undefined, hint: string | undefined) => {
+            // Resolve candidates via XPath or CSS selector; a malformed
+            // selector/XPath yields a clean structured error instead of throwing
+            // out of the injection (MOMO-117).
+            let candidates: Element[] = [];
+            if (xp) {
+              try {
+                const snapshot = document.evaluate(xp, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+                for (let i = 0; i < snapshot.snapshotLength; i++) {
+                  const node = snapshot.snapshotItem(i);
+                  if (node) candidates.push(node as Element);
+                }
+              } catch {
+                return { success: false, error: 'Invalid XPath' };
+              }
+            } else {
+              try {
+                candidates = Array.from(document.querySelectorAll(sel));
+              } catch {
+                return { success: false, error: 'Invalid selector' };
+              }
+            }
+
+            // Disambiguate among matches by visible text when a hint is supplied.
+            const el = (hint
+              ? candidates.find(c => (c.textContent || '').toLowerCase().includes(hint.toLowerCase()))
+              : candidates[0]) as HTMLElement | null;
+
             if (!el) return { success: false, error: 'Element not found' };
             if (!el.checkVisibility()) return { success: false, error: 'Element not visible' };
 
             const rect = el.getBoundingClientRect();
+
+            // Detect destructive/sensitive click targets (submit/delete/payment
+            // controls) so an irreversible write can be surfaced for human
+            // confirmation (MOMO-020).
+            const DESTRUCTIVE_KEYWORDS = [
+              'pay', 'buy', 'purchase', 'checkout', 'order', 'confirm', 'submit',
+              'delete', 'remove', 'cancel', 'logout', 'sign out', 'signout',
+              'deactivate', 'close account', 'unsubscribe', 'transfer', 'refund',
+            ];
+            const tag = el.tagName.toLowerCase();
+            const inputType = (el as HTMLInputElement).type || '';
+            const buttonType = (el as HTMLButtonElement).type || 'submit';
+            const rawText = (el.textContent || (el as HTMLInputElement).value || el.getAttribute('aria-label') || el.getAttribute('value') || '').toLowerCase();
+            const isFormSubmitControl =
+              (tag === 'input' && (inputType === 'submit' || inputType === 'image')) ||
+              (tag === 'button' && buttonType === 'submit' && el.closest('form') !== null);
+            const destructive = isFormSubmitControl || DESTRUCTIVE_KEYWORDS.some(k => rawText.includes(k));
+
             return {
               success: true,
               x: rect.x + rect.width / 2,
               y: rect.y + rect.height / 2,
               text: el.textContent?.slice(0, 100) || '',
-              tag: el.tagName.toLowerCase(),
+              tag,
               bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+              destructive,
+              label: rawText.slice(0, 50),
             };
           },
-          args: [selector],
+          args: [selector, xpath, textHint],
         });
 
         const res = probe[0]?.result;
         if (!res || !res.success) {
           return { success: false, error: res?.error || 'Click failed', summary: `Click failed: ${res?.error}`, navigationOccurred: false };
+        }
+
+        // Destructive/sensitive click targets require human confirmation before
+        // an irreversible write (MOMO-020).
+        if (res.destructive && !context.preAuthorized) {
+          return {
+            success: false,
+            error: 'Destructive or sensitive target - requires human confirmation',
+            summary: `Click blocked: potentially destructive target "${res.label}"`,
+            navigationOccurred: false,
+            requiresConfirmation: true,
+            confirmationData: {
+              origin,
+              action: 'click',
+              target: selector,
+              data: { selector, text: res.text, tag: res.tag },
+              reversible: false,
+              riskClass: 'dangerous',
+            },
+          };
         }
 
         const x = res.x as number;
@@ -351,7 +417,6 @@ export class ToolRegistry {
       policy: {
         riskClass: 'write',
         requiresConfirmation: false, // content script can detect password fields
-        dataClassification: 'confidential', // typed text may be sensitive
         reversible: false,
         idempotent: false,
         tokenCost: 5,
@@ -502,7 +567,6 @@ export class ToolRegistry {
       policy: {
         riskClass: 'read',
         requiresConfirmation: false,
-        dataClassification: 'public',
         reversible: true,
         idempotent: true,
         tokenCost: 1,
@@ -569,7 +633,6 @@ export class ToolRegistry {
       policy: {
         riskClass: 'read',
         requiresConfirmation: false,
-        dataClassification: 'internal', // extracted data may be private
         reversible: true,
         idempotent: true,
         tokenCost: 20,
@@ -634,7 +697,6 @@ export class ToolRegistry {
       policy: {
         riskClass: 'read',
         requiresConfirmation: false,
-        dataClassification: 'public',
         reversible: true,
         idempotent: true,
         tokenCost: 5,
@@ -690,7 +752,6 @@ export class ToolRegistry {
       policy: {
         riskClass: 'read',
         requiresConfirmation: false,
-        dataClassification: 'public',
         reversible: true,
         idempotent: true,
         tokenCost: 50,
@@ -722,7 +783,6 @@ export class ToolRegistry {
       policy: {
         riskClass: 'write',
         requiresConfirmation: false,
-        dataClassification: 'public',
         reversible: false,
         idempotent: false,
         tokenCost: 10,
@@ -793,7 +853,6 @@ export class ToolRegistry {
       policy: {
         riskClass: 'write',
         requiresConfirmation: false,
-        dataClassification: 'confidential',
         reversible: false,
         idempotent: false,
         tokenCost: 5,
