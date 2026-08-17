@@ -189,6 +189,11 @@ export class AgentOrchestrator {
     if (this.isRunning) {
       throw new Error('Agent already running');
     }
+    // An explicitly supplied but empty plan is a caller error, not a task that
+    // silently "completes" with zero steps (MOMO-097).
+    if (options?.plan && (!options.plan.steps || options.plan.steps.length === 0)) {
+      throw new Error('Plan has no steps');
+    }
 
     this.isRunning = true;
     this.abortController = new AbortController();
@@ -406,7 +411,7 @@ export class AgentOrchestrator {
         type: 'HUMAN_INTERVENTION_REQUIRED',
         payload: {
           stepId,
-          origin: this.getCurrentOrigin(),
+          origin: confirmationData.origin,
           action: action.name,
           target: confirmationData.target,
           // Use the tool's redacted confirmation payload, not the raw arguments
@@ -432,18 +437,33 @@ export class AgentOrchestrator {
     return hash.toString(16);
   }
 
-  private getCurrentOrigin(): string {
-    // Would be tracked from active tab
-    return 'unknown';
+  private async getCurrentOrigin(): Promise<string> {
+    try {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const url = tabs[0]?.url;
+      if (!url) return 'unknown';
+      const origin = new URL(url).origin;
+      // `chrome://`, `about:blank`, etc. report origin `'null'` — treat as unknown.
+      return origin && origin !== 'null' ? origin : 'unknown';
+    } catch {
+      return 'unknown';
+    }
   }
 
   async handleHumanResponse(response: HumanResponse) {
     if (!this.state?.pendingHumanIntervention) return;
 
     const pending = this.state.pendingHumanIntervention;
-    // Verify action hash and page revision match (prevent replay/stale)
-    if (response.actionHash !== pending.actionHash || response.pageRevision !== pending.pageRevision) {
-      pending.reject(new Error('Stale or replayed human response'));
+    // Bind the response to the exact action that requested confirmation (replay).
+    if (response.actionHash !== pending.actionHash) {
+      pending.reject(new Error('Replayed human response'));
+      this.state.pendingHumanIntervention = null;
+      return;
+    }
+    // The page must not have navigated since the confirmation was shown. Compare
+    // the echoed revision against the *current* one, not the captured one.
+    if (response.pageRevision !== this.state.pageRevision) {
+      pending.reject(new Error('Stale human response: page changed'));
       this.state.pendingHumanIntervention = null;
       return;
     }
@@ -530,8 +550,17 @@ export class AgentOrchestrator {
   }
 
   private async checkUrlMatches(pattern: string): Promise<boolean> {
+    // Validate and bound the regex: a malformed pattern must fail closed (not
+    // throw), and the length cap bounds ReDoS exposure against a short tab URL.
+    if (!pattern || pattern.length > 200) return false;
+    let regex: RegExp;
+    try {
+      regex = new RegExp(pattern);
+    } catch {
+      return false;
+    }
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    return tabs.some(tab => new RegExp(pattern).test(tab.url || ''));
+    return tabs.some(tab => regex.test(tab.url || ''));
   }
 
   private async handleStepFailure(step: PlanStep, result: ToolResult, idempotencyKey: string) {
@@ -565,7 +594,7 @@ export class AgentOrchestrator {
       payload: {
         stepId: step.id,
         error: result.error,
-        origin: this.getCurrentOrigin(),
+        origin: await this.getCurrentOrigin(),
         action: step.action.name,
         target: this.actionTarget(step.action),
         data: step.action.arguments,
@@ -764,8 +793,11 @@ export class AgentOrchestrator {
     // Invalidate DOM cache for updated tab
     if (tab.url && this.state) {
       this.state.domCache.delete(tab.url);
-      // Increment page revision on navigation
-      this.state.pageRevision++;
+      // Only count navigation of the tab the agent is driving, so background
+      // tab loads don't falsely invalidate an in-flight human confirmation.
+      if (tab.active) {
+        this.state.pageRevision++;
+      }
     }
   }
 
