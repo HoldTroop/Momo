@@ -1,6 +1,6 @@
 import { AgentState, Checkpoint, WalEntry, WalOperation, TaskQueueEntry, TaskStatus } from '../sw/orchestrator.js';
 import SuperJSON from 'superjson';
-import { redactText } from './redaction.js';
+import { redactText, redactValue } from './redaction.js';
 
 declare global {
   interface Window {
@@ -131,7 +131,7 @@ class PersistenceManager {
       sessionId,
       timestamp: entry.timestamp,
       operation: entry.operation,
-      data: entry.data,
+      data: redactValue(entry.data),
     };
 
     const id = await this.db.wal.add(record);
@@ -165,7 +165,7 @@ class PersistenceManager {
     const record: CheckpointRecord = {
       sessionId,
       stepIndex: checkpoint.stepIndex,
-      stateSnapshot: SuperJSON.serialize(checkpoint.stateSnapshot),
+      stateSnapshot: SuperJSON.serialize(redactValue(checkpoint.stateSnapshot)),
       walPosition: checkpoint.walPosition,
       timestamp: checkpoint.timestamp,
     };
@@ -197,7 +197,7 @@ class PersistenceManager {
       id: entry.id,
       sessionId: entry.sessionId,
       type: entry.type,
-      payload: entry.payload,
+      payload: redactValue(entry.payload),
       priority: entry.priority,
       deadline: entry.deadline,
       retryPolicy: entry.retryPolicy,

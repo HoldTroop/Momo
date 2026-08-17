@@ -64,6 +64,26 @@ export function redactText(text: string): string {
   return result.replace(KEY_VALUE_SECRET_PATTERN, '[REDACTED]');
 }
 
+/**
+ * Recursively redact strings inside plain objects and arrays (never mutating the
+ * input). Non-plain objects (Map, Set, Date, class instances) and primitives are
+ * passed through unchanged — they are handled by Dexie/SuperJSON separately.
+ */
+export function redactValue(value: unknown): unknown {
+  if (typeof value === 'string') return redactText(value);
+  if (Array.isArray(value)) return value.map(redactValue);
+  if (value !== null && typeof value === 'object') {
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) return value;
+    const result: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>)) {
+      result[key] = redactValue((value as Record<string, unknown>)[key]);
+    }
+    return result;
+  }
+  return value;
+}
+
 /** Redact an input's value: drop it entirely for sensitive fields, else strip embedded secrets. */
 export function redactInputValue(field: SensitiveFieldDescriptor, value: string): string {
   if (isSensitiveInput(field)) return '';

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isSensitiveInput, redactText, redactInputValue } from './redaction.js';
+import { isSensitiveInput, redactText, redactInputValue, redactValue } from './redaction.js';
 
 describe('isSensitiveInput', () => {
   it('flags password inputs by type', () => {
@@ -67,5 +67,34 @@ describe('redactInputValue', () => {
 
   it('passes through ordinary values untouched', () => {
     expect(redactInputValue({ type: 'text' }, 'hello world')).toBe('hello world');
+  });
+});
+
+describe('redactValue', () => {
+  it('redacts strings inside nested objects and arrays', () => {
+    const input = {
+      a: 'sk-abcdefghijklmnopqrstuvwxyz123456',
+      b: ['mail alice@example.com now', 42, true],
+      c: { d: 'card 4111 1111 1111 1111' },
+    };
+    const out = redactValue(input) as typeof input;
+    expect(out.a).not.toContain('sk-');
+    expect(out.b[0]).not.toContain('alice@example.com');
+    expect(out.c.d).not.toContain('4111');
+  });
+
+  it('does not mutate the input', () => {
+    const input = { a: 'sk-abcdefghijklmnopqrstuvwxyz123456' };
+    redactValue(input);
+    expect(input.a).toContain('sk-');
+  });
+
+  it('passes through primitives and non-plain objects unchanged', () => {
+    const date = new Date();
+    const map = new Map([['x', 'sk-abcdefghijklmnopqrstuvwxyz123456']]);
+    expect(redactValue(42)).toBe(42);
+    expect(redactValue(null)).toBe(null);
+    expect(redactValue(date)).toBe(date);
+    expect(redactValue(map)).toBe(map);
   });
 });
