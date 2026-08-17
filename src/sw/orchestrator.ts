@@ -7,6 +7,9 @@ import { cdpAdapter } from './cdp-adapter.js';
 
 /** How long to wait for a human confirmation before auto-denying (MOMO-045). */
 const CONFIRMATION_TIMEOUT_MS = 60_000;
+const MAX_RETRY_ATTEMPTS = 3;
+const RETRY_BACKOFF_BASE_MS = 1_000;
+const RETRY_BACKOFF_MAX_MS = 10_000;
 
 export interface AgentState {
   sessionId: string;
@@ -360,6 +363,12 @@ export class AgentOrchestrator {
 
     let result = await tool.execute(toolCall.arguments, context);
 
+    // A tool that navigated (e.g. navigate) advances the page revision so any
+    // in-flight confirmation or staleness check observes the change (MOMO-129).
+    if (result.navigationOccurred && this.state) {
+      this.state.pageRevision++;
+    }
+
     // Check if tool requires confirmation
     if (result.requiresConfirmation && result.confirmationData) {
       const decision = await this.awaitConfirmation(toolCall, stepId, result);
@@ -596,9 +605,17 @@ export class AgentOrchestrator {
     }
 
     switch (step.onFailure) {
-      case 'retry':
-        // Retry same step (will loop) - idempotency key prevents duplicate execution
+      case 'retry': {
+        // Bounded retry with exponential backoff (D5): after MAX_RETRY_ATTEMPTS
+        // failed attempts for this step, escalate instead of looping forever.
+        const attempts = this.state?.history.filter(h => h.stepId === step.id).length ?? 0;
+        if (attempts >= MAX_RETRY_ATTEMPTS) {
+          await this.escalateToHuman(step, result);
+          break;
+        }
+        await this.sleep(Math.min(RETRY_BACKOFF_BASE_MS * 2 ** attempts, RETRY_BACKOFF_MAX_MS));
         break;
+      }
       case 'escalate':
         await this.escalateToHuman(step, result);
         break;
@@ -731,19 +748,31 @@ export class AgentOrchestrator {
     const tab = tabs[0];
     if (!tab?.id) throw new Error('No active tab');
 
-    // Check if we have a cached AX tree from content script
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id, allFrames: false },
-      func: () => {
-        return (window as any).__axTreeSnapshot || null;
-      },
-    });
+    // Best-effort AX tree acquisition. Both the executeScript injection and the
+    // content-script message can fail on restricted pages (chrome://, a missing
+    // content script); degrade to an empty DOM rather than throwing so the
+    // bridge still returns a coherent (empty) result.
+    let axTree: any = null;
 
-    let axTree = results[0]?.result;
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: false },
+        func: () => {
+          return (window as any).__axTreeSnapshot || null;
+        },
+      });
+      axTree = results?.[0]?.result ?? null;
+    } catch {
+      axTree = null;
+    }
+
     if (!axTree) {
-      // Request fresh snapshot from content script
-      const response = await chrome.tabs.sendMessage(tab.id!, { type: 'GET_AX_TREE' });
-      axTree = response?.axTree;
+      try {
+        const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_AX_TREE' });
+        axTree = response?.axTree ?? null;
+      } catch {
+        axTree = null;
+      }
     }
 
     return this.domCompressor.compress(axTree, tab.url || '', tab.title || '');
