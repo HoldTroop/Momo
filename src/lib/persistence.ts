@@ -291,6 +291,11 @@ class PersistenceManager {
   private redactStateForPersistence(state: AgentState): AgentState {
     return {
       ...state,
+      // `pendingHumanIntervention` holds `resolve`/`reject` closures that cannot
+      // be serialized (and must not round-trip). Persist nothing in its place;
+      // a restored session is never mid-confirmation — the confirmation is
+      // re-armed by re-execution, or the session is errored on restart (D1).
+      pendingHumanIntervention: null,
       domCache: new Map(
         Array.from(state.domCache.entries()).map(([url, dom]) => [url, this.redactCompressedDom(dom)])
       ),

@@ -23,6 +23,8 @@ export interface AgentState {
   allowlist: string[];
   tokenBudget: { max: number; used: number };
   pendingHumanIntervention: HumanInterventionState | null;
+  status: SessionStatus;
+  error: string | null;
 }
 
 export interface HumanInterventionState {
@@ -138,10 +140,12 @@ export interface LayoutNode {
   children: LayoutNode[];
 }
 
+export type SessionStatus = 'idle' | 'running' | 'completed' | 'error';
+
 export interface SessionSummary {
   sessionId: string;
   goal: string;
-  status: 'idle' | 'running' | 'completed' | 'error';
+  status: SessionStatus;
   createdAt: number;
   updatedAt: number;
   stepCount: number;
@@ -181,6 +185,13 @@ export class AgentOrchestrator {
     if (latest) {
       this.state = latest.state;
       this.activeSessionId = latest.state.sessionId;
+      // A session persisted in 'running' was interrupted by SW suspension or a
+      // crash and cannot be safely resumed — mark it errored (D1).
+      if (this.state.status === 'running') {
+        this.state.status = 'error';
+        this.state.error = 'Interrupted by service worker restart';
+        await this.persistState();
+      }
       console.log('[Orchestrator] Resumed session:', this.activeSessionId);
     }
   }
@@ -222,6 +233,8 @@ export class AgentOrchestrator {
       allowlist: policy.allowlist,
       tokenBudget: { max: 100000, used: 0 },
       pendingHumanIntervention: null,
+      status: 'running' as const,
+      error: null,
     };
 
     await this.persistState();
@@ -581,7 +594,7 @@ export class AgentOrchestrator {
         await this.escalateToHuman(step, result);
         break;
       case 'abort':
-        await this.abortTask(result.error || 'Aborted by failure action');
+        await this.abortTask(result.error || 'Aborted by failure action', true);
         break;
     }
   }
@@ -614,9 +627,13 @@ export class AgentOrchestrator {
     return JSON.stringify(args);
   }
 
-  async abortTask(reason: string) {
+  async abortTask(reason: string, markError = false) {
     this.isRunning = false;
     this.abortController?.abort();
+    if (this.state) {
+      this.state.status = markError ? 'error' : 'idle';
+      this.state.error = markError ? reason : null;
+    }
     await this.persistState();
     chrome.runtime.sendMessage({ type: 'TASK_ABORTED', payload: { reason } });
   }
@@ -628,8 +645,16 @@ export class AgentOrchestrator {
    * detach/persist may not finish before the worker is killed.
    */
   async suspend(): Promise<void> {
+    const wasRunning = this.isRunning;
     this.isRunning = false;
     this.abortController?.abort();
+
+    // D1: a task interrupted by service-worker suspension cannot be safely
+    // resumed; mark it errored so the side panel requires an explicit restart.
+    if (wasRunning && this.state) {
+      this.state.status = 'error';
+      this.state.error = 'Service worker suspended mid-task';
+    }
 
     const sessionId = this.cdpSessionId;
     this.cdpSessionId = null;
@@ -651,18 +676,20 @@ export class AgentOrchestrator {
     return sessions.map(s => ({
       sessionId: s.state.sessionId,
       goal: s.state.goal,
-      status: this.sessionStatus(s.state.sessionId),
+      status: this.sessionStatus(s.state),
       createdAt: s.createdAt,
       updatedAt: s.updatedAt,
       stepCount: s.state.history.length,
     }));
   }
 
-  private sessionStatus(sessionId: string): SessionSummary['status'] {
-    if (sessionId === this.activeSessionId) {
-      return this.isRunning ? 'running' : 'idle';
+  private sessionStatus(state: AgentState): SessionSummary['status'] {
+    // The live `isRunning` flag is authoritative for the in-memory active
+    // session; otherwise fall back to the persisted lifecycle status.
+    if (state.sessionId === this.activeSessionId && this.isRunning) {
+      return 'running';
     }
-    return 'completed';
+    return state.status ?? 'completed';
   }
 
   /** Delete a persisted session and clear it from memory if it is active. */
@@ -679,6 +706,10 @@ export class AgentOrchestrator {
 
   private async completeTask() {
     this.isRunning = false;
+    if (this.state) {
+      this.state.status = 'completed';
+      this.state.error = null;
+    }
     chrome.runtime.sendMessage({ type: 'TASK_COMPLETED', payload: { sessionId: this.activeSessionId } });
     await this.persistState();
   }

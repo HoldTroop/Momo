@@ -253,7 +253,7 @@ export class MessageRouter {
     } catch {
       // Bridge may already be gone; best effort.
     }
-    await this.orchestrator.abortTask('Offscreen kill switch activated');
+    await this.orchestrator.abortTask('Offscreen kill switch activated', true);
     return { success: true };
   }
 }
