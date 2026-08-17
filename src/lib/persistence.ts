@@ -290,6 +290,19 @@ class PersistenceManager {
     };
   }
 
+  /**
+   * Redact a tool call's arguments before they enter the persisted session. The
+   * one argument that carries an arbitrary secret (the exact text typed by
+   * `type`/`human_type`) is dropped outright; every other argument is scrubbed of
+   * embedded secrets (emails, keys, tokens, card numbers) by `redactValue`.
+   */
+  private redactToolCall(action: { name: string; arguments: Record<string, unknown> }): { name: string; arguments: Record<string, unknown> } {
+    if (action.name === 'type' || action.name === 'human_type') {
+      return { ...action, arguments: { ...action.arguments, text: '[REDACTED]' } };
+    }
+    return { ...action, arguments: redactValue(action.arguments) as Record<string, unknown> };
+  }
+
   private redactStateForPersistence(state: AgentState): AgentState {
     return {
       ...state,
@@ -298,11 +311,36 @@ class PersistenceManager {
       // a restored session is never mid-confirmation — the confirmation is
       // re-armed by re-execution, or the session is errored on restart (D1).
       pendingHumanIntervention: null,
+      // Goal, plan arguments, and variables may all embed PII/secrets the
+      // external agent supplied (MOMO-017/070/076/113).
+      goal: redactText(state.goal),
+      plan: state.plan
+        ? {
+            ...state.plan,
+            goal: redactText(state.plan.goal),
+            steps: state.plan.steps.map(step => ({
+              ...step,
+              action: this.redactToolCall(step.action),
+              expectedOutcome: redactText(step.expectedOutcome),
+            })),
+          }
+        : null,
+      variables: redactValue(state.variables) as Record<string, unknown>,
       history: state.history.map(step => ({
         ...step,
+        action: this.redactToolCall(step.action),
         result: {
           ...step.result,
+          data: redactValue(step.result.data),
           summary: redactText(step.result.summary ?? ''),
+          error: step.result.error ? redactText(step.result.error) : undefined,
+          confirmationData: step.result.confirmationData
+            ? {
+                ...step.result.confirmationData,
+                target: redactText(step.result.confirmationData.target),
+                data: redactValue(step.result.confirmationData.data) as Record<string, unknown>,
+              }
+            : undefined,
         },
       })),
     };
