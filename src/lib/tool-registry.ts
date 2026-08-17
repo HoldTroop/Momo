@@ -795,4 +795,58 @@ export class ToolRegistry {
       policy: t.policy,
     }));
   }
+
+  /**
+   * Validate an inbound tool call against its declared JSON-schema parameters
+   * (required keys, enums, and primitive types). Returns an error string on
+   * failure, or null when the call is well-formed. This is the external-agent
+   * ingress gate: untrusted arguments never reach a tool executor.
+   */
+  validateArguments(toolCall: ToolCall): string | null {
+    const tool = this.tools.get(toolCall.name);
+    if (!tool) return `Unknown tool: ${toolCall.name}`;
+
+    const schema = tool.parameters as {
+      properties?: Record<string, { type?: string; enum?: unknown[] }>;
+      required?: string[];
+      additionalProperties?: boolean;
+    };
+    const args = toolCall.arguments ?? {};
+    const properties = schema.properties ?? {};
+    const required = schema.required ?? [];
+
+    for (const key of required) {
+      if (!(key in args)) return `Missing required argument: ${key}`;
+    }
+
+    for (const [key, value] of Object.entries(args)) {
+      const prop = properties[key];
+      if (!prop) {
+        if (schema.additionalProperties === false) return `Unexpected argument: ${key}`;
+        continue;
+      }
+      if (value === undefined) continue;
+
+      if (prop.enum && !prop.enum.includes(value)) {
+        return `Invalid value for ${key}: expected one of ${JSON.stringify(prop.enum)}`;
+      }
+
+      switch (prop.type) {
+        case 'string':
+          if (typeof value !== 'string') return `Argument ${key} must be a string`;
+          break;
+        case 'number':
+          if (typeof value !== 'number') return `Argument ${key} must be a number`;
+          break;
+        case 'boolean':
+          if (typeof value !== 'boolean') return `Argument ${key} must be a boolean`;
+          break;
+        case 'object':
+          if (typeof value !== 'object' || value === null) return `Argument ${key} must be an object`;
+          break;
+      }
+    }
+
+    return null;
+  }
 }

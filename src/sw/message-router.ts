@@ -1,4 +1,4 @@
-import { AgentOrchestrator, ToolCall, ToolResult, HumanResponse } from './orchestrator.js';
+import { AgentOrchestrator, HumanResponse } from './orchestrator.js';
 import { cdpAdapter } from './cdp-adapter.js';
 
 export class MessageRouter {
@@ -42,6 +42,7 @@ export class MessageRouter {
     this.handlers.set('RESUME_TASK', this.handleResumeTask.bind(this));
     this.handlers.set('GET_STATE', this.handleGetState.bind(this));
     this.handlers.set('EXECUTE_TOOL', this.handleExecuteTool.bind(this));
+    this.handlers.set('LIST_TOOLS', this.handleListTools.bind(this));
     this.handlers.set('GET_DOM_SNAPSHOT', this.handleGetDomSnapshot.bind(this));
     this.handlers.set('HUMAN_RESPONSE', this.handleHumanResponse.bind(this));
     this.handlers.set('GET_SESSIONS', this.handleGetSessions.bind(this));
@@ -126,21 +127,20 @@ export class MessageRouter {
   }
 
   private async handleExecuteTool(payload: unknown) {
-    const { name, arguments: args } = payload as { name: string; arguments: Record<string, unknown> };
-    const toolCall: ToolCall = { name, arguments: args };
-    const state = this.orchestrator.getState();
-    if (!state) {
+    const { name, arguments: args } = payload as { name?: string; arguments?: Record<string, unknown> };
+    if (!name || typeof name !== 'string') {
+      return { error: 'Missing tool name' };
+    }
+    if (!this.orchestrator.getState()) {
       return { error: 'No active session' };
     }
-    const domSnapshot = await this.orchestrator.captureDomSnapshot();
-    const context = {
-      dom: domSnapshot,
-      variables: state.variables || {},
-      step: toolCall,
-    };
-    // Tool execution is handled internally by the orchestrator run loop
-    // This endpoint is for manual tool invocation from side panel
-    return { error: 'Direct tool execution not implemented; use START_TASK with plan' };
+    // External-agent ingress: schema-validate then execute through the policy
+    // gate + confirmation flow. The executor captures its own DOM snapshot.
+    return this.orchestrator.executeToolCall({ name, arguments: args ?? {} }, crypto.randomUUID());
+  }
+
+  private async handleListTools() {
+    return { tools: this.orchestrator.listTools() };
   }
 
   private async handleGetDomSnapshot() {

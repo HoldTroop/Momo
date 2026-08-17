@@ -1,7 +1,6 @@
 import { PersistenceManager } from '../lib/persistence.js';
 import { ToolRegistry, ToolContext } from '../lib/tool-registry.js';
 import { DomCompressor } from '../lib/dom-compressor.js';
-import { LlmClient } from '../lib/llm-client.js';
 import { TaskQueue } from '../lib/task-queue.js';
 import { cdpAdapter } from './cdp-adapter.js';
 
@@ -148,7 +147,6 @@ export class AgentOrchestrator {
   private persistence: PersistenceManager;
   private toolRegistry: ToolRegistry;
   private domCompressor: DomCompressor;
-  private llmClient: LlmClient;
   private taskQueue: TaskQueue;
 
   private state: AgentState | null = null;
@@ -161,7 +159,6 @@ export class AgentOrchestrator {
     this.persistence = persistence;
     this.toolRegistry = new ToolRegistry();
     this.domCompressor = new DomCompressor();
-    this.llmClient = new LlmClient();
     this.taskQueue = new TaskQueue(persistence);
   }
 
@@ -220,21 +217,17 @@ export class AgentOrchestrator {
 
     await this.persistState();
 
-    if (!options?.plan) {
-      await this.createPlan(goal);
+    // The extension is a pure automation bridge: it does not plan. When no plan
+    // is supplied, external agents drive execution via EXECUTE_TOOL against the
+    // persisted session. The run loop simply stays idle (no steps to run).
+    if (options?.plan) {
+      this.state.plan = options.plan;
     }
 
     // Start task queue for this session
     this.taskQueue.startProcessing(sessionId, this.taskProcessor.bind(this));
 
     this.runLoop();
-  }
-
-  private async createPlan(goal: string) {
-    const domSnapshot = await this.captureDomSnapshot();
-    const plan = await this.llmClient.createPlan(goal, domSnapshot, this.state!.variables);
-    this.state!.plan = plan;
-    await this.persistState();
   }
 
   private async runLoop() {
@@ -297,9 +290,24 @@ export class AgentOrchestrator {
   }
 
   private async executeStep(step: PlanStep, idempotencyKey: string): Promise<ToolResult> {
-    const tool = this.toolRegistry.get(step.action.name);
+    return this.executeToolCall(step.action, idempotencyKey, step.id);
+  }
+
+  /**
+   * Execute a single tool call against the active session. This is the shared
+   * ingress for both the internal run loop (START_TASK-with-plan) and external
+   * agents driving the bridge via EXECUTE_TOOL. Arguments are schema-validated
+   * before any executor runs.
+   */
+  async executeToolCall(toolCall: ToolCall, idempotencyKey: string, stepId = idempotencyKey): Promise<ToolResult> {
+    const tool = this.toolRegistry.get(toolCall.name);
     if (!tool) {
-      throw new Error(`Unknown tool: ${step.action.name}`);
+      throw new Error(`Unknown tool: ${toolCall.name}`);
+    }
+
+    const validationError = this.toolRegistry.validateArguments(toolCall);
+    if (validationError) {
+      throw new Error(validationError);
     }
 
     const domSnapshot = await this.captureDomSnapshot();
@@ -310,7 +318,7 @@ export class AgentOrchestrator {
     const context: ToolContext = {
       dom: domSnapshot,
       variables: this.state!.variables,
-      step: step.action,
+      step: toolCall,
       allowlist: this.state!.allowlist,
       tokenBudget: this.state!.tokenBudget,
       pageRevision: this.state!.pageRevision,
@@ -319,11 +327,11 @@ export class AgentOrchestrator {
       getCdpSession: () => this.getOrCreateCdpSession(),
     };
 
-    const result = await tool.execute(step.action.arguments, context);
+    const result = await tool.execute(toolCall.arguments, context);
 
     // Check if tool requires confirmation
     if (result.requiresConfirmation && result.confirmationData) {
-      return await this.requestConfirmation(step, result, idempotencyKey);
+      return await this.requestConfirmation(toolCall, stepId, result);
     }
 
     return result;
@@ -336,7 +344,7 @@ export class AgentOrchestrator {
     return this.cdpSessionId;
   }
 
-  private async requestConfirmation(step: PlanStep, result: ToolResult, idempotencyKey: string): Promise<ToolResult> {
+  private async requestConfirmation(action: ToolCall, stepId: string, result: ToolResult): Promise<ToolResult> {
     const confirmationData = result.confirmationData;
     if (!confirmationData) {
       throw new Error('Confirmation requested without confirmation data');
@@ -348,7 +356,7 @@ export class AgentOrchestrator {
         return;
       }
 
-      const actionHash = this.hashAction(step.action);
+      const actionHash = this.hashAction(action);
 
       this.state.pendingHumanIntervention = {
         resolve: (response: HumanResponse) => {
@@ -362,7 +370,7 @@ export class AgentOrchestrator {
           }
         },
         reject,
-        stepId: step.id,
+        stepId,
         actionHash,
         pageRevision: this.state.pageRevision,
       };
@@ -370,11 +378,11 @@ export class AgentOrchestrator {
       chrome.runtime.sendMessage({
         type: 'HUMAN_INTERVENTION_REQUIRED',
         payload: {
-          stepId: step.id,
+          stepId,
           origin: this.getCurrentOrigin(),
-          action: step.action.name,
+          action: action.name,
           target: confirmationData.target,
-          data: step.action.arguments,
+          data: action.arguments,
           reversible: confirmationData.reversible,
           riskClass: confirmationData.riskClass,
           actionHash,
@@ -746,6 +754,11 @@ export class AgentOrchestrator {
 
   isActive(): boolean {
     return this.isRunning;
+  }
+
+  /** Expose the full tool catalog (name, description, JSON-schema params, policy). */
+  listTools(): Record<string, unknown>[] {
+    return this.toolRegistry.getSchemas();
   }
 
   private async taskProcessor(entry: any) {
