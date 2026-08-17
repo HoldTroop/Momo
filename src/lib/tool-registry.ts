@@ -279,7 +279,10 @@ export class ToolRegistry {
           };
         }
 
-        const result = await chrome.scripting.executeScript({
+        // Resolve the element's clickable center via the content script (read-only),
+        // then dispatch a trusted CDP mouse click at those coordinates instead of a
+        // synthetic el.click() (MOMO-019/080).
+        const probe = await chrome.scripting.executeScript({
           target: { tabId: context.tabId, allFrames: false },
           func: (sel: string) => {
             const el = document.querySelector(sel) as HTMLElement | null;
@@ -287,10 +290,10 @@ export class ToolRegistry {
             if (!el.checkVisibility()) return { success: false, error: 'Element not visible' };
 
             const rect = el.getBoundingClientRect();
-            el.click();
-
             return {
               success: true,
+              x: rect.x + rect.width / 2,
+              y: rect.y + rect.height / 2,
               text: el.textContent?.slice(0, 100) || '',
               tag: el.tagName.toLowerCase(),
               bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
@@ -299,14 +302,31 @@ export class ToolRegistry {
           args: [selector],
         });
 
-        const res = result[0]?.result;
-        if (!res?.success) {
+        const res = probe[0]?.result;
+        if (!res || !res.success) {
           return { success: false, error: res?.error || 'Click failed', summary: `Click failed: ${res?.error}`, navigationOccurred: false };
+        }
+
+        const x = res.x as number;
+        const y = res.y as number;
+
+        const sessionId = await context.getCdpSession();
+        if (!sessionId) {
+          return { success: false, error: 'CDP session unavailable', summary: 'Click failed: no CDP session', navigationOccurred: false };
+        }
+
+        try {
+          // Trusted input via CDP, not a synthetic el.click() (MOMO-019/080).
+          await cdpAdapter.dispatchMouseEvent(sessionId, 'mouseMoved', x, y);
+          await cdpAdapter.dispatchMouseEvent(sessionId, 'mousePressed', x, y);
+          await cdpAdapter.dispatchMouseEvent(sessionId, 'mouseReleased', x, y);
+        } catch (e) {
+          return { success: false, error: String(e), summary: 'Click failed', navigationOccurred: false };
         }
 
         return {
           success: true,
-          data: res,
+          data: { text: res.text, tag: res.tag, bounds: res.bounds },
           summary: `Clicked "${res.text}" (${res.tag})`,
           navigationOccurred: false,
         };
@@ -387,31 +407,50 @@ export class ToolRegistry {
           };
         }
 
-        // Check if the target is a sensitive field, using the same detector as
-        // the bridge/human_type path (isSensitiveInput) rather than a weaker
-        // inline duplicate (MOMO-021/087/088).
-        const sensitiveCheck = await chrome.scripting.executeScript({
+        // Resolve the field descriptor, verify visibility, and focus/clear it in a
+        // single content-script injection (MOMO-118): the sensitive check and the
+        // focus happen atomically on the same element so the target cannot be
+        // swapped to a sensitive input between the check and the write.
+        const probe = await chrome.scripting.executeScript({
           target: { tabId: context.tabId, allFrames: false },
-          func: (sel: string) => {
+          func: (sel: string, clear: boolean) => {
             const el = document.querySelector(sel) as HTMLInputElement | HTMLTextAreaElement | null;
-            if (!el) return null;
+            if (!el) return { success: false, error: 'Element not found' };
+            if (!el.checkVisibility()) return { success: false, error: 'Element not visible' };
+
+            el.focus();
+            if (clear) {
+              el.value = '';
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+
             return {
-              type: el.type || '',
-              autocomplete: el.autocomplete || '',
-              name: el.name || '',
-              id: el.id || '',
+              success: true,
+              field: {
+                type: el.type || '',
+                autocomplete: el.autocomplete || '',
+                name: el.name || '',
+                id: el.id || '',
+              },
             };
           },
-          args: [selector],
+          args: [selector, clearFirst],
         });
 
-        const field = sensitiveCheck[0]?.result ?? null;
-        const isSensitive = field ? isSensitiveInput(field) : false;
+        const res = probe[0]?.result;
+        if (!res || !res.success) {
+          return { success: false, error: res?.error || 'Type failed', summary: `Type failed: ${res?.error}`, navigationOccurred: false };
+        }
+
+        // Sensitive-field gate uses the shared detector (isSensitiveInput) rather
+        // than a weaker inline duplicate (MOMO-021/087/088). Focusing/clearing is
+        // harmless; only the actual typing (insertText below) is gated.
+        const isSensitive = res.field ? isSensitiveInput(res.field) : true;
         if (isSensitive && !context.preAuthorized) {
           return {
             success: false,
             error: 'Sensitive field detected - requires human confirmation',
-            summary: `Type blocked: sensitive field (${field?.type})`,
+            summary: `Type blocked: sensitive field (${res.field?.type})`,
             navigationOccurred: false,
             requiresConfirmation: true,
             confirmationData: {
@@ -425,41 +464,24 @@ export class ToolRegistry {
           };
         }
 
-        const result = await chrome.scripting.executeScript({
-          target: { tabId: context.tabId, allFrames: false },
-          func: (sel: string, txt: string, clear: boolean, enter: boolean) => {
-            const el = document.querySelector(sel) as HTMLInputElement | HTMLTextAreaElement | null;
-            if (!el) return { success: false, error: 'Element not found' };
-            if (!el.checkVisibility()) return { success: false, error: 'Element not visible' };
-
-            if (clear) el.value = '';
-            el.value += txt;
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-
-            if (enter) {
-              el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-              el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
-            }
-
-            // Do not return the field value: it may contain the just-typed secret
-            // and would flow into history/persistence.
-            return { success: true };
-          },
-          args: [selector, text, clearFirst, pressEnter],
-        });
-
-        const res = result[0]?.result;
-        if (!res?.success) {
-          return { success: false, error: res?.error || 'Type failed', summary: `Type failed: ${res?.error}`, navigationOccurred: false };
+        const sessionId = await context.getCdpSession();
+        if (!sessionId) {
+          return { success: false, error: 'CDP session unavailable', summary: 'Type failed: no CDP session', navigationOccurred: false };
         }
 
-        return {
-          success: true,
-          data: res,
-          summary: `Typed into ${selector}`,
-          navigationOccurred: false,
-        };
+        try {
+          // Trusted typing via CDP Input.insertText, not el.value += / synthetic
+          // KeyboardEvent (MOMO-080/083).
+          await cdpAdapter.insertText(sessionId, text);
+          if (pressEnter) {
+            await cdpAdapter.dispatchKeyEvent(sessionId, 'Enter', 'keyDown');
+            await cdpAdapter.dispatchKeyEvent(sessionId, 'Enter', 'keyUp');
+          }
+          // Never echo the typed text into the summary (it flows into history/persistence).
+          return { success: true, summary: `Typed into ${selector}`, navigationOccurred: false };
+        } catch (e) {
+          return { success: false, error: String(e), summary: 'Type failed', navigationOccurred: false };
+        }
       },
     });
 
