@@ -1,6 +1,7 @@
 import { PersistenceManager } from '../lib/persistence.js';
 import { ToolRegistry, ToolContext } from '../lib/tool-registry.js';
 import { DomCompressor } from '../lib/dom-compressor.js';
+import { redactText, redactValue } from '../lib/redaction.js';
 import { TaskQueue } from '../lib/task-queue.js';
 import { cdpAdapter } from './cdp-adapter.js';
 
@@ -331,10 +332,25 @@ export class AgentOrchestrator {
 
     // Check if tool requires confirmation
     if (result.requiresConfirmation && result.confirmationData) {
-      return await this.requestConfirmation(toolCall, stepId, result);
+      return this.redactResult(await this.requestConfirmation(toolCall, stepId, result));
     }
 
-    return result;
+    return this.redactResult(result);
+  }
+
+  /** Redact any sensitive values before a tool result leaves the extension. */
+  private redactResult(result: ToolResult): ToolResult {
+    return {
+      ...result,
+      data: result.data !== undefined ? redactValue(result.data) : undefined,
+      summary: redactText(result.summary),
+      error: result.error ? redactText(result.error) : undefined,
+      confirmationData: result.confirmationData ? {
+        ...result.confirmationData,
+        target: redactText(result.confirmationData.target),
+        data: redactValue(result.confirmationData.data) as Record<string, unknown>,
+      } : undefined,
+    };
   }
 
   /** Attach (once) to the active tab via chrome.debugger and reuse the session. */

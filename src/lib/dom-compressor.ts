@@ -75,8 +75,8 @@ export class DomCompressor {
     const layout = this.buildLayoutTree(axTree.nodes[0], nodesById, visited);
 
     return {
-      url,
-      title,
+      url: redactText(url),
+      title: redactText(title),
       actions: topElements,
       summary,
       layout,
@@ -250,8 +250,8 @@ export class DomCompressor {
 
   private emptyDom(url: string, title: string): CompressedDom {
     return {
-      url,
-      title,
+      url: redactText(url),
+      title: redactText(title),
       actions: [],
       summary: 'Empty or inaccessible page',
       layout: { role: 'root', bounds: this.emptyRect(), children: [] },
