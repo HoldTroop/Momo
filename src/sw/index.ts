@@ -12,7 +12,7 @@ const portManager = new PortManager(orchestrator, messageRouter);
 
 let isInitialized = false;
 
-async function initialize() {
+async function initialize(attempt = 0) {
   if (isInitialized) return;
 
   try {
@@ -23,10 +23,14 @@ async function initialize() {
     console.log('[SW] Autonomous Agent initialized');
   } catch (error) {
     console.error('[SW] Initialization failed:', error);
+    // Retry with capped exponential backoff so a transient failure (e.g. a
+    // momentarily unavailable IndexedDB) doesn't leave the worker inert (MOMO-093).
+    const delay = Math.min(1000 * 2 ** attempt, 30_000);
+    setTimeout(() => void initialize(attempt + 1), delay);
   }
 }
 
-chrome.runtime.onStartup.addListener(initialize);
+chrome.runtime.onStartup.addListener(() => void initialize());
 chrome.runtime.onInstalled.addListener(async (details) => {
   if (details.reason === 'install') {
     await persistence.init();
@@ -48,7 +52,9 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  alarmManager.handleAlarm(alarm);
+  alarmManager.handleAlarm(alarm).catch((err) => {
+    console.error('[SW] Alarm handler failed:', err);
+  });
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
