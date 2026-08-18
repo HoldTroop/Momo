@@ -1,4 +1,4 @@
-import { AgentOrchestrator, HumanResponse, BridgeEvent } from './orchestrator.js';
+import { AgentOrchestrator, HumanResponse, BridgeEvent, BridgeCommand } from './orchestrator.js';
 import { cdpAdapter } from './cdp-adapter.js';
 import { getWsClient, initWsClient } from './ws-client.js';
 import { discoverBridgeUrl } from './bridge-port.js';
@@ -34,6 +34,14 @@ export class MessageRouter {
     'EXTRACT',
   ]);
 
+  /** Bridge → extension commands the service worker will honor. M1 exposes only
+   * `get_status`; the full perception/action command set lands in M3 (§5, §6).
+   * Unknown commands are answered with a `CommandResult` error, never silently
+   * ignored, so the bridge's `send_command` cannot hang past its timeout. */
+  private static readonly BRIDGE_COMMAND_ALLOWLIST: ReadonlySet<string> = new Set([
+    'get_status',
+  ]);
+
   private wsClient: ReturnType<typeof getWsClient> | null = null;
 
   constructor(orchestrator: AgentOrchestrator) {
@@ -44,7 +52,7 @@ export class MessageRouter {
 
   private async initWsClient() {
     try {
-      this.wsClient = initWsClient(this.handleBridgeEvent.bind(this));
+      this.wsClient = initWsClient(this.handleBridgeEvent.bind(this), this.handleBridgeCommand.bind(this));
       await this.wsClient.connect();
     } catch (e) {
       console.error('[MessageRouter] Failed to initialize WS client:', e);
@@ -54,6 +62,43 @@ export class MessageRouter {
   private handleBridgeEvent(event: BridgeEvent) {
     // Forward async events (policy_changed, audit_log_append, etc.) to side panel
     chrome.runtime.sendMessage({ type: 'BRIDGE_EVENT', payload: event });
+  }
+
+  /** Dispatch a bridge → extension command and reply with a `CommandResult`.
+   * Always answers (success or error) so the bridge's `send_command` resolves
+   * instead of timing out (§6.4). */
+  private async handleBridgeCommand(cmd: BridgeCommand) {
+    if (!cmd.request_id) {
+      console.warn('[MessageRouter] Bridge command missing request_id, dropping');
+      return;
+    }
+    try {
+      const result = await this.dispatchBridgeCommand(cmd.command, cmd.params);
+      this.wsClient?.sendCommandResult(cmd.request_id, result);
+    } catch (e) {
+      this.wsClient?.sendCommandResult(cmd.request_id, {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  private async dispatchBridgeCommand(command: string, params: unknown): Promise<unknown> {
+    if (!MessageRouter.BRIDGE_COMMAND_ALLOWLIST.has(command)) {
+      throw new Error(`Unknown bridge command: ${command}`);
+    }
+    switch (command) {
+      case 'get_status': {
+        const state = this.orchestrator.getState();
+        return {
+          command: 'get_status',
+          status: 'ok',
+          active_task: state ? 'running' : 'idle',
+          timestamp: Date.now(),
+        };
+      }
+      default:
+        throw new Error(`Unhandled bridge command: ${command}`);
+    }
   }
 
   private registerHandlers() {

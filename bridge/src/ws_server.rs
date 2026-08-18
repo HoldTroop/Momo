@@ -9,12 +9,26 @@ use axum::{
     Router,
 };
 use futures_util::{SinkExt, StreamExt};
-use tokio::sync::{mpsc, RwLock};
-use tokio::time::interval;
+use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
+use tokio::time::{interval, timeout};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::{BridgeRequest, BridgeResponse, BridgeServer};
+
+/// How long `send_command` waits for the extension's `CommandResult` before
+/// resolving as a timeout. Mirrors the extension's own 30 s `WsClient` timeout
+/// (PHASE9_MCP_PLAN.md §6.4).
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Failure modes for a bridge→extension command round-trip.
+#[derive(Debug)]
+pub enum CommandError {
+    /// No extension is connected to the WebSocket.
+    Disconnected,
+    /// The extension did not answer within `COMMAND_TIMEOUT`.
+    Timeout,
+}
 
 /// A single WebSocket connection to the extension.
 struct WsConnection {
@@ -28,6 +42,10 @@ struct WsConnection {
 pub struct ConnectionManager {
     connections: Arc<RwLock<HashMap<Uuid, WsConnection>>>,
     bridge_server: Arc<BridgeServer>,
+    /// In-flight bridge→extension commands, keyed by the `request_id` the bridge
+    /// generated when issuing the `Command`. The read loop resolves the matching
+    /// entry when the extension replies with `CommandResult`.
+    pending_commands: Arc<Mutex<HashMap<String, oneshot::Sender<serde_json::Value>>>>,
 }
 
 impl ConnectionManager {
@@ -35,6 +53,7 @@ impl ConnectionManager {
         Self {
             connections: Arc::new(RwLock::new(HashMap::new())),
             bridge_server,
+            pending_commands: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -56,6 +75,7 @@ impl ConnectionManager {
         let (mut ws_sender, mut ws_receiver) = ws.split();
         let connections = self.connections.clone();
         let bridge_server = self.bridge_server.clone();
+        let pending_commands = self.pending_commands.clone();
 
         // Write loop: drain the response channel and send frames
         let write_loop = tokio::spawn(async move {
@@ -87,6 +107,17 @@ impl ConnectionManager {
                                 continue;
                             }
                         };
+
+                        // A CommandResult resolves an in-flight bridge→extension
+                        // command and expects no response back (PHASE9 §6).
+                        if let BridgeRequest::CommandResult { request_id, result } = &request {
+                            if let Some(tx) = pending_commands.lock().await.remove(request_id) {
+                                let _ = tx.send(result.clone());
+                            } else {
+                                warn!("CommandResult with no pending command: {}", request_id);
+                            }
+                            continue;
+                        }
 
                         // Update session_id on first PolicyCheck/Simulate* if not set
                         if connections.read().await.get(&conn_id).map(|c| c.session_id.is_none()).unwrap_or(false) {
@@ -143,6 +174,10 @@ impl ConnectionManager {
 
             // Cleanup on disconnect
             connections.write().await.remove(&conn_id);
+            // Fail all in-flight commands: dropping the oneshot Sender makes the
+            // awaiting `send_command` resolve as Disconnected rather than hang
+            // until the timeout (single-connection model, PHASE9 §6.4).
+            pending_commands.lock().await.clear();
             info!("WS connection closed: {} (remaining: {})", conn_id, connections.read().await.len());
         });
 
@@ -193,6 +228,67 @@ impl ConnectionManager {
         }
     }
 
+    /// Issue a bridge→extension command and await its `CommandResult`
+    /// (PHASE9_MCP_PLAN.md §6). Used by the MCP server (Mode B) to request
+    /// perception and actions from the extension over the same WebSocket the
+    /// extension already connects to.
+    ///
+    /// Semantics (§6.4):
+    /// - No connected extension → `Err(CommandError::Disconnected)` immediately.
+    /// - No `CommandResult` within `COMMAND_TIMEOUT` → `Err(CommandError::Timeout)`.
+    /// - Extension disconnects mid-flight → the oneshot is dropped, so this
+    ///   resolves as `Err(CommandError::Disconnected)`.
+    ///
+    /// Concurrent commands are supported: each call owns its own `request_id`
+    /// slot in the pending registry.
+    pub async fn send_command(
+        &self,
+        command: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, CommandError> {
+        // Fail fast when nothing is connected (avoids a pointless 30 s wait).
+        if self.connections.read().await.is_empty() {
+            return Err(CommandError::Disconnected);
+        }
+
+        let request_id = self.bridge_server.next_request_id();
+        let (tx, rx) = oneshot::channel::<serde_json::Value>();
+        self.pending_commands.lock().await.insert(request_id.clone(), tx);
+
+        let message = BridgeResponse::Command {
+            request_id: request_id.clone(),
+            command: command.to_string(),
+            params,
+        };
+
+        // Broadcast to every connected extension; the first matching
+        // CommandResult wins (in practice there is a single extension).
+        let mut sent = false;
+        {
+            let conns = self.connections.read().await;
+            for conn in conns.values() {
+                if conn.sender.send(message.clone()).is_ok() {
+                    sent = true;
+                }
+            }
+        }
+        if !sent {
+            self.pending_commands.lock().await.remove(&request_id);
+            return Err(CommandError::Disconnected);
+        }
+
+        match timeout(COMMAND_TIMEOUT, rx).await {
+            Ok(Ok(result)) => Ok(result),
+            // Sender dropped (connection closed and cleaned up) → treat as a
+            // disconnect, not a silent hang.
+            Ok(Err(_)) => Err(CommandError::Disconnected),
+            Err(_) => {
+                self.pending_commands.lock().await.remove(&request_id);
+                Err(CommandError::Timeout)
+            }
+        }
+    }
+
     /// Get the number of active connections.
     pub async fn connection_count(&self) -> usize {
         self.connections.read().await.len()
@@ -227,4 +323,166 @@ pub fn ws_router(manager: Arc<ConnectionManager>) -> Router {
     Router::new()
         .route("/ws", get(ws_handler))
         .layer(axum::Extension(manager))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message as WsMessage;
+
+    type Client = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+    /// Start a real bridge (BridgeServer + ConnectionManager + axum WS router)
+    /// on an ephemeral localhost port and return the manager + port.
+    async fn start_server() -> (Arc<ConnectionManager>, u16) {
+        let bridge = Arc::new(crate::BridgeServer::new().expect("BridgeServer::new"));
+        let mgr = Arc::new(ConnectionManager::new(bridge));
+        let app = ws_router(mgr.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("axum server");
+        });
+        (mgr, port)
+    }
+
+    /// Connect a real WebSocket client and wait until the server has registered
+    /// the connection (the upgrade → `register` hand-off is asynchronous).
+    async fn connect_client(mgr: &ConnectionManager, port: u16) -> Client {
+        let (stream, _resp) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/ws"))
+            .await
+            .expect("client handshake");
+        for _ in 0..200 {
+            if mgr.connection_count().await == 1 {
+                return stream;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("connection never registered");
+    }
+
+    /// Read frames until `pred` matches, skipping heartbeat PINGs (which the
+    /// server emits immediately on connect and every 15 s). Returns the first
+    /// matching frame's JSON, or `None` if `deadline` elapses first.
+    async fn read_until(
+        stream: &mut Client,
+        deadline: std::time::Duration,
+        pred: impl Fn(&serde_json::Value) -> bool,
+    ) -> Option<serde_json::Value> {
+        let end = std::time::Instant::now() + deadline;
+        loop {
+            let now = std::time::Instant::now();
+            if now >= end {
+                return None;
+            }
+            let msg = match tokio::time::timeout(end - now, stream.next()).await {
+                Ok(Some(Ok(msg))) => msg,
+                _ => return None, // timeout, stream end, or frame error
+            };
+            match msg {
+                WsMessage::Binary(bytes) => {
+                    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else { continue };
+                    if v["payload"]["data"]["status"].as_str() == Some("ping") {
+                        continue;
+                    }
+                    if pred(&v) {
+                        return Some(v);
+                    }
+                }
+                _ => {} // ignore text/pong/close frames
+            }
+        }
+    }
+
+    /// (a) Connected round-trip: `send_command("get_status")` must deliver a
+    /// `Command` frame over the real WebSocket and resolve with the matching
+    /// `CommandResult` reply — the full §6 path, not just compilation.
+    #[tokio::test]
+    async fn command_roundtrip_connected() {
+        let (mgr, port) = start_server().await;
+        let mut client = connect_client(&mgr, port).await;
+
+        let mgr2 = mgr.clone();
+        let start = std::time::Instant::now();
+        let cmd = tokio::spawn(async move {
+            let res = mgr2.send_command("get_status", serde_json::json!({})).await;
+            (res, start.elapsed())
+        });
+
+        // The extension receives the `Command` frame and echoes back a
+        // `CommandResult` (binary, exactly as the fixed extension sends it).
+        let frame = read_until(&mut client, std::time::Duration::from_secs(5), |v| v["type"] == "Command")
+            .await
+            .expect("Command frame");
+        assert_eq!(frame["payload"]["command"], "get_status");
+        let request_id = frame["payload"]["request_id"].as_str().unwrap().to_string();
+
+        let reply = serde_json::json!({
+            "type": "COMMAND_RESULT",
+            "payload": {
+                "request_id": request_id,
+                "result": { "command": "get_status", "status": "ok", "active_task": "idle" }
+            }
+        });
+        client
+            .send(WsMessage::Binary(serde_json::to_vec(&reply).unwrap().into()))
+            .await
+            .unwrap();
+
+        let (res, elapsed) = cmd.await.unwrap();
+        assert!(elapsed < std::time::Duration::from_secs(5), "round-trip too slow: {elapsed:?}");
+        let result = res.expect("send_command should resolve Ok");
+        assert_eq!(result["status"], "ok");
+        assert_eq!(result["command"], "get_status");
+    }
+
+    /// (b) Disconnected fail-fast: with no extension connected, `send_command`
+    /// must return `CommandError::Disconnected` immediately, not wait out the
+    /// 30 s `COMMAND_TIMEOUT`.
+    #[tokio::test]
+    async fn command_disconnected_fails_fast() {
+        let (mgr, _port) = start_server().await;
+        assert_eq!(mgr.connection_count().await, 0);
+
+        let start = std::time::Instant::now();
+        let res = mgr.send_command("get_status", serde_json::json!({})).await;
+        let elapsed = start.elapsed();
+
+        assert!(matches!(res, Err(CommandError::Disconnected)), "expected Disconnected, got {res:?}");
+        assert!(elapsed < std::time::Duration::from_secs(1), "fail-fast violated: took {elapsed:?}");
+    }
+
+    /// Regression guard for the text/binary frame mismatch: the read loop only
+    /// matches `Message::Binary`, so a TEXT frame (what the extension sent
+    /// before the binary-send fix) is dropped, while the same request sent as a
+    /// BINARY frame is handled. Uses `OBSERVE` (a struct variant) so the
+    /// request has a real payload and no unit-variant ambiguity.
+    #[tokio::test]
+    async fn text_frame_dropped_binary_frame_handled() {
+        let (_mgr, port) = start_server().await;
+        let mut client = connect_client(&_mgr, port).await;
+
+        let observe = serde_json::json!({ "session_id": "s", "origin": "http://example.com", "include_markdown": false, "page_revision": 0 });
+
+        // Text frame → dropped (no response carrying this request id arrives).
+        let text_req = serde_json::json!({ "id": "req-text-1", "type": "OBSERVE", "payload": observe });
+        client
+            .send(WsMessage::Text(serde_json::to_string(&text_req).unwrap().into()))
+            .await
+            .unwrap();
+        let resp = read_until(&mut client, std::time::Duration::from_millis(500), |v| v["payload"]["request_id"] == "req-text-1").await;
+        assert!(resp.is_none(), "text frame should be dropped, but an OBSERVE response arrived");
+
+        // Binary frame → handled (response carrying this request id arrives).
+        let bin_req = serde_json::json!({ "id": "req-bin-1", "type": "OBSERVE", "payload": observe });
+        client
+            .send(WsMessage::Binary(serde_json::to_vec(&bin_req).unwrap().into()))
+            .await
+            .unwrap();
+        let frame = read_until(&mut client, std::time::Duration::from_secs(5), |v| v["payload"]["request_id"] == "req-bin-1")
+            .await
+            .expect("binary OBSERVE response");
+        assert_eq!(frame["type"], "Ok");
+    }
 }

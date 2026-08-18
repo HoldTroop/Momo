@@ -1019,7 +1019,7 @@ export interface BridgeRequest {
 }
 
 export interface BridgeResponse {
-  type: 'Ok' | 'Error' | 'Event' | 'StreamChunk' | 'StreamEnd';
+  type: 'Ok' | 'Error' | 'Event' | 'Command' | 'StreamChunk' | 'StreamEnd';
   payload: BridgeResponsePayload;
 }
 
@@ -1030,6 +1030,16 @@ export interface BridgeResponsePayload {
   message?: string;
   event?: string;
   chunk?: unknown;
+  command?: string;
+  params?: unknown;
+}
+
+/** Bridge → extension command (PHASE9_MCP_PLAN.md §6). The extension answers
+ * with a `CommandResult` bridge request carrying the same `request_id`. */
+export interface BridgeCommand {
+  request_id: string;
+  command: string;
+  params: unknown;
 }
 
 export interface BridgeEvent {

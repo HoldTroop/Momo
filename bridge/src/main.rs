@@ -48,6 +48,12 @@ enum BridgeRequest {
     Ping,
     GetStatus,
     Shutdown,
+
+    // Command channel reply (extension → bridge). Sent in response to a
+    // `BridgeResponse::Command` issued by the bridge; the connection manager
+    // correlates it by `request_id` and never forwards it to `handle_request`
+    // (PHASE9_MCP_PLAN.md §6).
+    CommandResult { request_id: String, result: serde_json::Value },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +62,10 @@ enum BridgeResponse {
     Ok { request_id: String, data: serde_json::Value },
     Error { request_id: String, code: i32, message: String },
     Event { event: String, data: serde_json::Value },
+    // Bridge → extension command (PHASE9_MCP_PLAN.md §6). The bridge issues a
+    // correlated request for perception/action; the extension answers with a
+    // `BridgeRequest::CommandResult` carrying the same `request_id`.
+    Command { request_id: String, command: String, params: serde_json::Value },
     StreamChunk { request_id: String, chunk: serde_json::Value },
     StreamEnd { request_id: String },
 }
@@ -286,6 +296,18 @@ impl BridgeServer {
             BridgeRequest::Shutdown => {
                 info!("Shutdown requested");
                 std::process::exit(0);
+            }
+
+            // Intercepted by the connection manager before reaching here; a
+            // CommandResult that slips through is a programming error, not a
+            // routable request.
+            BridgeRequest::CommandResult { .. } => {
+                warn!("CommandResult reached handle_request (should be intercepted by ws_server)");
+                Ok(BridgeResponse::Error {
+                    request_id,
+                    code: -1,
+                    message: "CommandResult must be handled by the connection manager".to_string(),
+                })
             }
         }
     }

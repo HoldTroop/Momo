@@ -1,4 +1,4 @@
-import { BridgeRequest, BridgeResponse, BridgeEvent } from '../sw/orchestrator.js';
+import { BridgeRequest, BridgeResponse, BridgeEvent, BridgeCommand } from '../sw/orchestrator.js';
 
 type PendingResolver = (resp: BridgeResponse) => void;
 
@@ -15,9 +15,11 @@ export class WsClient {
   private maxReconnectDelay = 30000;
   private isClosing = false;
   private onEventCallback: (evt: BridgeEvent) => void;
+  private onCommandCallback: (cmd: BridgeCommand) => void;
 
-  constructor(onEvent: (evt: BridgeEvent) => void) {
+  constructor(onEvent: (evt: BridgeEvent) => void, onCommand?: (cmd: BridgeCommand) => void) {
     this.onEventCallback = onEvent;
+    this.onCommandCallback = onCommand ?? (() => {});
   }
 
   async connect(): Promise<void> {
@@ -89,7 +91,7 @@ export class WsClient {
     this.heartbeatTimer = setInterval(() => {
       if (this.ws?.readyState === WebSocket.OPEN) {
         // Send application-level ping
-        this.ws.send(JSON.stringify({ type: 'PING' }));
+        this.sendBinary({ type: 'PING' });
       } else {
         this.stopHeartbeat();
       }
@@ -101,6 +103,15 @@ export class WsClient {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
     }
+  }
+
+  /**
+   * Send an object as a BINARY WebSocket frame. The bridge's read loop only
+   * matches `Message::Binary` (a text frame would be silently dropped), so every
+   * extension → bridge message must be UTF-8 encoded and sent as bytes.
+   */
+  private sendBinary(obj: unknown): void {
+    this.ws!.send(new TextEncoder().encode(JSON.stringify(obj)));
   }
 
   private handleMessage(event: MessageEvent) {
@@ -115,6 +126,17 @@ export class WsClient {
       // Handle async events (BridgeEvent)
       if (response.type === 'Event') {
         this.onEventCallback({ event: response.payload.event || '', data: response.payload.data });
+        return;
+      }
+
+      // Handle bridge → extension commands (PHASE9 §6): dispatch to the
+      // command handler and expect no request/response correlation here.
+      if (response.type === 'Command') {
+        this.onCommandCallback({
+          request_id: response.payload.request_id || '',
+          command: response.payload.command || '',
+          params: response.payload.params,
+        });
         return;
       }
 
@@ -164,8 +186,22 @@ export class WsClient {
         result.then(resolve).catch(reject);
       });
 
-      this.ws!.send(JSON.stringify(request));
+      this.sendBinary(request);
     });
+  }
+
+  /**
+   * Fire-and-forget reply to a bridge → extension `Command`. The bridge does
+   * not send a response back (CommandResult is intercepted by the connection
+   * manager), so no request/response correlation is registered.
+   */
+  sendCommandResult(requestId: string, result: unknown): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn('[WsClient] Cannot send CommandResult: WebSocket not connected');
+      return;
+    }
+    const message = { type: 'COMMAND_RESULT', payload: { request_id: requestId, result } };
+    this.sendBinary(message);
   }
 
   close() {
@@ -217,15 +253,15 @@ async function discoverBridgeUrl(): Promise<string> {
 // Singleton getter
 let wsClientInstance: WsClient | null = null;
 
-export function getWsClient(onEvent?: (evt: BridgeEvent) => void): WsClient {
+export function getWsClient(onEvent?: (evt: BridgeEvent) => void, onCommand?: (cmd: BridgeCommand) => void): WsClient {
   if (!wsClientInstance) {
     if (!onEvent) throw new Error('WsClient not initialized and no onEvent provided');
-    wsClientInstance = new WsClient(onEvent);
+    wsClientInstance = new WsClient(onEvent, onCommand);
   }
   return wsClientInstance;
 }
 
-export function initWsClient(onEvent: (evt: BridgeEvent) => void): WsClient {
-  wsClientInstance = new WsClient(onEvent);
+export function initWsClient(onEvent: (evt: BridgeEvent) => void, onCommand?: (cmd: BridgeCommand) => void): WsClient {
+  wsClientInstance = new WsClient(onEvent, onCommand);
   return wsClientInstance;
 }
