@@ -361,9 +361,9 @@ fn parse_port_file(args: &[String]) -> Option<PathBuf> {
     None
 }
 
-/// Bind the WebSocket listener on an ephemeral localhost port, write the
-/// discovery port file, and serve the router on a background task. Shared by
-/// Mode A (foreground serve) and Mode B (background serve; MCP stdio foreground).
+/// Bind the WebSocket listener on a fixed port in 9090-9100 (the range the
+/// extension scans) and serve the router on a background task. Shared by Mode A
+/// (foreground serve) and Mode B (background serve; MCP stdio foreground).
 async fn start_ws_listener(
     connection_manager: Arc<ConnectionManager>,
     port_file_override: Option<PathBuf>,
@@ -373,23 +373,44 @@ async fn start_ws_listener(
         .route("/health", get(|| async { "ok" }))
         .layer(CorsLayer::permissive());
 
-    // Bind to ephemeral port on localhost
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    // Bind a fixed port in 9090-9100. The MV3 extension cannot read files or
+    // env vars, so it discovers the bridge by scanning this range; an ephemeral
+    // OS port would never be found (BUG 1).
+    const FIRST_PORT: u16 = 9090;
+    const LAST_PORT: u16 = 9100;
+
+    let mut listener = None;
+    for port in FIRST_PORT..=LAST_PORT {
+        match TcpListener::bind(("127.0.0.1", port)).await {
+            Ok(bound) => {
+                listener = Some(bound);
+                break;
+            }
+            Err(_) => continue,
+        }
+    }
+
+    let listener = listener.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Could not bind WebSocket listener: all ports {}-{} are in use. \
+             Free one of these ports and restart the bridge.",
+            FIRST_PORT,
+            LAST_PORT
+        )
+    })?;
     let port = listener.local_addr()?.port();
 
-    // Write port to well-known file for extension discovery (overridable path).
-    let port_file = port_file_override
-        .or_else(|| dirs::home_dir().map(|h| h.join(".momo").join("bridge_port")));
-    if let Some(port_file) = port_file {
+    // Test-only hook: write the (fixed) port to an explicit file so the mock
+    // extension harness (`tools/mock-extension.mjs`, run as `--mcp --port FILE`)
+    // can learn it. The default `~/.momo/bridge_port` is gone — the extension
+    // scans 9000-9100 and has no filesystem access.
+    if let Some(port_file) = port_file_override {
         if let Some(parent) = port_file.parent() {
             std::fs::create_dir_all(parent).ok();
         }
         std::fs::write(&port_file, port.to_string()).ok();
         info!("Bridge port written to {:?}", port_file);
     }
-
-    // Also set env var for processes that inherit it
-    std::env::set_var("MOMO_BRIDGE_WS_PORT", port.to_string());
 
     info!("Bridge WS listening on ws://127.0.0.1:{port}/ws");
     info!("Health endpoint: http://127.0.0.1:{port}/health");

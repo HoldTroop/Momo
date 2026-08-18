@@ -1,19 +1,9 @@
-// Port discovery for the Rust bridge WebSocket server.
-// The bridge writes its ephemeral port to a well-known file on startup.
+// Port discovery for the Rust bridge WebSocket server. The bridge binds a
+// fixed port in 9090-9100 (bridge/src/main.rs); the MV3 extension scans that
+// range for its /health endpoint.
 
 export async function discoverBridgePort(): Promise<number> {
-  // 1. Try env var (set by bridge at startup) - not available in extension context directly
-  // but we can check if it's passed via native messaging or command line
-
-  // 2. Try well-known file: ~/.momo/bridge_port
-  try {
-    // In a Chrome extension, we can't read files directly.
-    // We use native messaging to ask a helper, or the bridge writes to a location
-    // accessible via chrome.storage.local or we scan ports.
-    // For now, we'll scan ports as the primary method.
-  } catch {}
-
-  // 3. Fallback: scan 9000-9100 for /health endpoint
+  // Scan 9000-9100 for /health endpoint
   for (let port = 9000; port <= 9100; port++) {
     try {
       const controller = new AbortController();

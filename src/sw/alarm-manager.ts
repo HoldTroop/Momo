@@ -1,4 +1,5 @@
 import { AgentOrchestrator } from './orchestrator.js';
+import { getWsClient } from './ws-client.js';
 
 export class AlarmManager {
   private orchestrator: AgentOrchestrator;
@@ -59,13 +60,15 @@ export class AlarmManager {
   }
 
   private async handleKeepAlive() {
-    // The periodic alarm itself is what wakes the service worker in MV3; a
-    // storage write does nothing extra to prevent suspension. Just ping the
-    // native messaging host to keep it alive (MOMO-090, MOMO-120).
+    // The periodic alarm itself is what wakes the service worker in MV3; the
+    // WebSocket client's own heartbeat keeps the bridge connection alive. The
+    // legacy native-messaging ping is gone (no `nativeMessaging` host anymore,
+    // MOMO-090/MOMO-120) — a fire-and-forget WS ping is the replacement.
     try {
-      await chrome.runtime.sendNativeMessage('agent.bridge', { type: 'PING' });
+      getWsClient().ping();
     } catch {
-      // Host might not be running yet, that's OK
+      // WS client not initialized yet (constructor order); the alarm still woke
+      // the worker, which is the actual keepalive.
     }
   }
 
@@ -96,11 +99,13 @@ export class AlarmManager {
       return;
     }
 
-    // Check native messaging host health
+    // Nudge the bridge over the WebSocket client (the native messaging host no
+    // longer exists). The client self-reconnects; a ping here is a cheap
+    // liveness signal, not a health gate.
     try {
-      await chrome.runtime.sendNativeMessage('agent.bridge', { type: 'PING' });
+      getWsClient().ping();
     } catch {
-      console.warn('[Watchdog] Native messaging host unreachable');
+      console.warn('[Watchdog] WebSocket client unavailable');
     }
   }
 

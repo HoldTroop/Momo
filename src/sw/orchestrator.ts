@@ -4,6 +4,7 @@ import { DomCompressor } from '../lib/dom-compressor.js';
 import { redactText, redactValue } from '../lib/redaction.js';
 import { TaskQueue } from '../lib/task-queue.js';
 import { cdpAdapter } from './cdp-adapter.js';
+import { getWsClient } from './ws-client.js';
 
 /** How long to wait for a human confirmation before auto-denying (MOMO-045). */
 const CONFIRMATION_TIMEOUT_MS = 60_000;
@@ -964,10 +965,12 @@ export class AgentOrchestrator {
   }
 
   private async syncWithBridge() {
+    // The retired native-messaging path (`sendNativeMessage('agent.bridge')`)
+    // is gone; state sync / liveness now rides the WebSocket client.
     try {
-      await chrome.runtime.sendNativeMessage('agent.bridge', { type: 'PING' });
+      getWsClient().ping();
     } catch {
-      // Bridge not available
+      // WS client not yet connected; nothing to sync.
     }
   }
 

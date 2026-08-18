@@ -204,6 +204,18 @@ export class WsClient {
     this.sendBinary(message);
   }
 
+  /**
+   * Fire-and-forget application ping (keepalive). Never throws and carries no
+   * request/response correlation — the bridge answers with a `status: "pong"`
+   * frame that `handleMessage` ignores. Replaces the retired native-messaging
+   * keepalive (BUG 5).
+   */
+  ping(): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.sendBinary({ type: 'PING' });
+    }
+  }
+
   close() {
     this.isClosing = true;
     this.stopHeartbeat();
@@ -220,19 +232,10 @@ export class WsClient {
 }
 
 async function discoverBridgeUrl(): Promise<string> {
-  // 1. Try env var (set by bridge at startup)
-  if (typeof process !== 'undefined' && process.env.MOMO_BRIDGE_WS_PORT) {
-    return `ws://127.0.0.1:${process.env.MOMO_BRIDGE_WS_PORT}/ws`;
-  }
-
-  // 2. Try well-known file
-  try {
-    // In extension context, we can't read files directly.
-    // This will be handled by bridge-port.ts which uses chrome.runtime.sendNativeMessage
-    // or reads from a known location. For now, fall through to scanning.
-  } catch {}
-
-  // 3. Fallback: scan common ports
+  // The bridge binds a fixed port in 9090-9100 (bridge/src/main.rs). The MV3
+  // service worker has no filesystem access to read ~/.momo/bridge_port and no
+  // `process.env`, so discovery is a health-endpoint scan over that range
+  // (BUG 1). Scan ascending and stop at the first healthy port.
   for (let port = 9000; port <= 9100; port++) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/health`, {
@@ -243,11 +246,11 @@ async function discoverBridgeUrl(): Promise<string> {
         return `ws://127.0.0.1:${port}/ws`;
       }
     } catch {
-      // Continue scanning
+      // Port not answering; try the next one.
     }
   }
 
-  throw new Error('Could not discover bridge port');
+  throw new Error('Could not discover bridge port in 9000-9100');
 }
 
 // Singleton getter

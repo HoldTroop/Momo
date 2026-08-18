@@ -93,11 +93,15 @@ export class DomCompressor {
   }
 
   private isVisible(node: AxNode): boolean {
-    if (!node.rect) return false;
-    if (node.rect.width <= 0 || node.rect.height <= 0) return false;
+    // A missing rect means "geometry unknown", not "hidden": CDP AX nodes
+    // (Accessibility.getFullAXTree) carry no bounding box, so treating an
+    // absent rect as invisible silently dropped every actionable element from
+    // the CDP path. Visibility is judged by explicit states/attributes; a rect,
+    // when present, is an additional zero-size gate.
     if (node.states.includes('invisible') || node.states.includes('hidden')) return false;
     if (node.attributes.display === 'none' || node.attributes.visibility === 'hidden') return false;
     if (node.attributes.opacity === '0') return false;
+    if (node.rect && (node.rect.width <= 0 || node.rect.height <= 0)) return false;
     return true;
   }
 
