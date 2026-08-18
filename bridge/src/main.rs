@@ -13,6 +13,8 @@ use tower_http::cors::CorsLayer;
 use tracing::{debug, error, info, warn};
 
 mod llm;
+mod mcp_stdio;
+mod mcp_tools;
 mod policy;
 mod types;
 mod ws_server;
@@ -322,45 +324,105 @@ async fn main() -> Result<()> {
 
     info!("Starting Autonomous AI Agent Bridge Server");
 
+    let args: Vec<String> = std::env::args().collect();
+    let mcp_mode = args.iter().any(|a| a == "--mcp");
+    let legacy_stdio = args.iter().any(|a| a == "--legacy-stdio");
+    let port_file_override = parse_port_file(&args);
+
+    // BridgeServer (and its PolicyEngine) is constructed identically in every
+    // mode; the mode only changes what drives it (PHASE9 §3.1).
     let server = Arc::new(BridgeServer::new()?);
     let connection_manager = Arc::new(ConnectionManager::new(server.clone()));
 
-    // Check for legacy stdio mode (for transition period)
-    let legacy_stdio = std::env::args().any(|arg| arg == "--legacy-stdio");
-
-    if legacy_stdio {
+    if mcp_mode {
+        info!("Running in Mode B (MCP over stdio)");
+        run_mcp_mode(connection_manager, port_file_override).await?;
+    } else if legacy_stdio {
         info!("Running in legacy native-messaging mode (stdio)");
         run_legacy_stdio(server).await?;
     } else {
-        // WebSocket server mode
-        let app = Router::new()
-            .merge(ws_router(connection_manager.clone()))
-            .route("/health", get(|| async { "ok" }))
-            .layer(CorsLayer::permissive());
-
-        // Bind to ephemeral port on localhost
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
-        let port = listener.local_addr()?.port();
-
-        // Write port to well-known file for extension discovery
-        if let Some(port_file) = dirs::home_dir().map(|h| h.join(".momo").join("bridge_port")) {
-            if let Some(parent) = port_file.parent() {
-                std::fs::create_dir_all(parent).ok();
-            }
-            std::fs::write(&port_file, port.to_string()).ok();
-            info!("Bridge port written to {:?}", port_file);
-        }
-
-        // Also set env var for processes that inherit it
-        std::env::set_var("MOMO_BRIDGE_WS_PORT", port.to_string());
-
-        info!("Bridge WS listening on ws://127.0.0.1:{port}/ws");
-        info!("Health endpoint: http://127.0.0.1:{port}/health");
-
-        axum::serve(listener, app).await?;
+        info!("Running in Mode A (WebSocket server)");
+        run_ws_mode(connection_manager, port_file_override).await?;
     }
 
     info!("Bridge server shutting down");
+    Ok(())
+}
+
+/// Parse `--port FILE` (used by `--mcp --port FILE` for testing). Returns the
+/// path that follows `--port`, if present.
+fn parse_port_file(args: &[String]) -> Option<PathBuf> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--port" {
+            return it.next().map(PathBuf::from);
+        }
+    }
+    None
+}
+
+/// Bind the WebSocket listener on an ephemeral localhost port, write the
+/// discovery port file, and serve the router on a background task. Shared by
+/// Mode A (foreground serve) and Mode B (background serve; MCP stdio foreground).
+async fn start_ws_listener(
+    connection_manager: Arc<ConnectionManager>,
+    port_file_override: Option<PathBuf>,
+) -> Result<(u16, tokio::task::JoinHandle<()>)> {
+    let app = Router::new()
+        .merge(ws_router(connection_manager.clone()))
+        .route("/health", get(|| async { "ok" }))
+        .layer(CorsLayer::permissive());
+
+    // Bind to ephemeral port on localhost
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+
+    // Write port to well-known file for extension discovery (overridable path).
+    let port_file = port_file_override
+        .or_else(|| dirs::home_dir().map(|h| h.join(".momo").join("bridge_port")));
+    if let Some(port_file) = port_file {
+        if let Some(parent) = port_file.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        std::fs::write(&port_file, port.to_string()).ok();
+        info!("Bridge port written to {:?}", port_file);
+    }
+
+    // Also set env var for processes that inherit it
+    std::env::set_var("MOMO_BRIDGE_WS_PORT", port.to_string());
+
+    info!("Bridge WS listening on ws://127.0.0.1:{port}/ws");
+    info!("Health endpoint: http://127.0.0.1:{port}/health");
+
+    let handle = tokio::spawn(async move {
+        if let Err(e) = axum::serve(listener, app).await {
+            error!("WS server error: {e}");
+        }
+    });
+
+    Ok((port, handle))
+}
+
+/// Mode A: WebSocket server on the foreground task.
+async fn run_ws_mode(
+    connection_manager: Arc<ConnectionManager>,
+    port_file_override: Option<PathBuf>,
+) -> Result<()> {
+    let (_port, handle) = start_ws_listener(connection_manager, port_file_override).await?;
+    handle.await?;
+    Ok(())
+}
+
+/// Mode B: WebSocket server on a background task; MCP stdio loop on the
+/// foreground task. Both share the same `ConnectionManager` (PHASE9 §3.2).
+async fn run_mcp_mode(
+    connection_manager: Arc<ConnectionManager>,
+    port_file_override: Option<PathBuf>,
+) -> Result<()> {
+    let (port, _ws_handle) =
+        start_ws_listener(connection_manager.clone(), port_file_override).await?;
+    info!("Mode B: WS server on port {port}; MCP stdio on stdin/stdout");
+    mcp_stdio::run(connection_manager).await?;
     Ok(())
 }
 

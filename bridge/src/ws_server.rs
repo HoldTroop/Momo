@@ -17,9 +17,16 @@ use uuid::Uuid;
 use crate::{BridgeRequest, BridgeResponse, BridgeServer};
 
 /// How long `send_command` waits for the extension's `CommandResult` before
-/// resolving as a timeout. Mirrors the extension's own 30 s `WsClient` timeout
-/// (PHASE9_MCP_PLAN.md §6.4).
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+/// resolving as a timeout. Defaults to 30 s (mirroring the extension's own
+/// `WsClient` timeout, PHASE9_MCP_PLAN.md §6.4); overridable via
+/// `MOMO_COMMAND_TIMEOUT_MS` so tests can exercise the timeout path quickly.
+fn command_timeout() -> Duration {
+    std::env::var("MOMO_COMMAND_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(Duration::from_secs(30))
+}
 
 /// Failure modes for a bridge→extension command round-trip.
 #[derive(Debug)]
@@ -277,7 +284,7 @@ impl ConnectionManager {
             return Err(CommandError::Disconnected);
         }
 
-        match timeout(COMMAND_TIMEOUT, rx).await {
+        match timeout(command_timeout(), rx).await {
             Ok(Ok(result)) => Ok(result),
             // Sender dropped (connection closed and cleaned up) → treat as a
             // disconnect, not a silent hang.
@@ -484,5 +491,92 @@ mod tests {
             .await
             .expect("binary OBSERVE response");
         assert_eq!(frame["type"], "Ok");
+    }
+
+    /// Full MCP-layer round-trip (PHASE9 §6 + §4.3): an MCP `tools/call` flows
+    /// through the stdio framing into `send_command`, the connected extension
+    /// answers with a `CommandResult`, and the MCP result carries `isError:false`
+    /// with the echoed tool result — the success path M2 depends on.
+    #[tokio::test]
+    async fn mcp_tools_call_connected_roundtrip() {
+        let (mgr, port) = start_server().await;
+        let mut client = connect_client(&mgr, port).await;
+
+        let mgr2 = mgr.clone();
+        let start = std::time::Instant::now();
+        let call = tokio::spawn(async move {
+            crate::mcp_stdio::handle_message(
+                &mgr2,
+                r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"read_page_content","arguments":{"tab_id":17}}}"#,
+            )
+            .await
+        });
+
+        // The "extension" receives the Command and echoes a CommandResult.
+        let frame = read_until(&mut client, std::time::Duration::from_secs(5), |v| v["type"] == "Command")
+            .await
+            .expect("Command frame");
+        assert_eq!(frame["payload"]["command"], "read_page_content");
+        assert_eq!(frame["payload"]["params"]["tab_id"], 17, "tab_id must thread into Command params");
+        let request_id = frame["payload"]["request_id"].as_str().unwrap().to_string();
+
+        let reply = serde_json::json!({
+            "type": "COMMAND_RESULT",
+            "payload": {
+                "request_id": request_id,
+                "result": { "title": "Example", "url": "https://example.com", "markdown_content": "# Heading\n\nBody" }
+            }
+        });
+        client
+            .send(WsMessage::Binary(serde_json::to_vec(&reply).unwrap().into()))
+            .await
+            .unwrap();
+
+        let response = call.await.unwrap().expect("MCP response line");
+        assert!(start.elapsed() < std::time::Duration::from_secs(5), "round-trip too slow: {:?}", start.elapsed());
+        let v: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(v["id"], 7);
+        assert_eq!(v["result"]["isError"], false);
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let embedded: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(embedded["title"], "Example");
+        assert_eq!(embedded["url"], "https://example.com");
+    }
+
+    /// Timeout path: a connected extension that never answers a Command must
+    /// resolve as `command_timeout` (isError:true) at the MCP layer — not hang,
+    /// and not surface as a JSON-RPC error. 30 s by design (COMMAND_TIMEOUT), so
+    /// it is `#[ignore]`d and run explicitly.
+    #[tokio::test]
+    #[ignore]
+    async fn mcp_tools_call_timeout_returns_command_timeout() {
+        let (mgr, port) = start_server().await;
+        let mut client = connect_client(&mgr, port).await;
+
+        let mgr2 = mgr.clone();
+        let start = std::time::Instant::now();
+        let call = tokio::spawn(async move {
+            crate::mcp_stdio::handle_message(
+                &mgr2,
+                r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"list_tabs","arguments":{}}}"#,
+            )
+            .await
+        });
+
+        // Read the Command frame but deliberately never reply.
+        let _frame = read_until(&mut client, std::time::Duration::from_secs(5), |v| v["type"] == "Command")
+            .await
+            .expect("Command frame");
+
+        let response = call.await.unwrap().expect("MCP response line");
+        let elapsed = start.elapsed();
+        let v: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(v["result"]["isError"], true);
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let embedded: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(embedded["error"], "command_timeout");
+        assert_eq!(embedded["command"], "list_tabs");
+        assert!(elapsed >= std::time::Duration::from_secs(29), "resolved before the 30 s window: {elapsed:?}");
+        assert!(elapsed < std::time::Duration::from_secs(35), "did not resolve promptly at timeout: {elapsed:?}");
     }
 }
