@@ -2,6 +2,14 @@ import { BridgeRequest, BridgeResponse, BridgeEvent, BridgeCommand } from '../sw
 
 type PendingResolver = (resp: BridgeResponse) => void;
 
+/** A request buffered while the socket is down, flushed on reconnect (BUG 2). */
+type OutboxEntry = {
+  type: string;
+  payload: object;
+  resolve: (value: any) => void;
+  reject: (reason?: any) => void;
+};
+
 export class WsClient {
   private ws: WebSocket | null = null;
   private url: string;
@@ -10,10 +18,11 @@ export class WsClient {
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private messageId = 0;
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
   private baseReconnectDelay = 1000;
   private maxReconnectDelay = 30000;
   private isClosing = false;
+  /** Requests buffered while disconnected; flushed on reconnect (BUG 2). */
+  private outbox: OutboxEntry[] = [];
   private onEventCallback: (evt: BridgeEvent) => void;
   private onCommandCallback: (cmd: BridgeCommand) => void;
 
@@ -23,10 +32,26 @@ export class WsClient {
   }
 
   async connect(): Promise<void> {
-    this.url = await discoverBridgeUrl();
     this.isClosing = false;
     this.reconnectAttempts = 0;
-    return this.doConnect();
+    return this.tryConnect();
+  }
+
+  /**
+   * Discover the bridge and open a socket. A failed discovery is not fatal: it
+   * schedules a reconnect, so a bridge that isn't up yet (or restarted on a new
+   * port) is retried instead of leaving the client permanently disconnected
+   * (BUG 2).
+   */
+  private async tryConnect(): Promise<void> {
+    try {
+      this.url = await discoverBridgeUrl();
+    } catch (e) {
+      console.error('[WsClient] Bridge not discoverable:', e);
+      this.scheduleReconnect();
+      return;
+    }
+    await this.doConnect();
   }
 
   private doConnect(): Promise<void> {
@@ -39,6 +64,7 @@ export class WsClient {
           console.log('[WsClient] Connected to', this.url);
           this.reconnectAttempts = 0;
           this.startHeartbeat();
+          this.flushOutbox();
           resolve();
         };
 
@@ -64,26 +90,38 @@ export class WsClient {
     });
   }
 
-  private scheduleReconnect() {
-    if (this.reconnectTimer) return;
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.error('[WsClient] Max reconnect attempts reached');
-      return;
+  private scheduleReconnect(immediate = false) {
+    if (this.isClosing) return;
+    if (this.reconnectTimer) {
+      if (!immediate) return;
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
 
-    const delay = Math.min(
-      this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts),
-      this.maxReconnectDelay
-    );
+    const delay = immediate
+      ? 0
+      : Math.min(this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts), this.maxReconnectDelay);
     this.reconnectAttempts++;
     console.log(`[WsClient] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      this.doConnect().catch(() => {
-        // doConnect handles its own errors via onclose
+      this.tryConnect().catch(() => {
+        // tryConnect routes failures to scheduleReconnect (via onclose or a
+        // failed discovery), so this catch is only a safety net.
       });
     }, delay);
+  }
+
+  /** Send any requests buffered while the socket was down (BUG 2). */
+  private flushOutbox() {
+    if (this.outbox.length === 0) return;
+    const queued = this.outbox;
+    this.outbox = [];
+    console.log(`[WsClient] Flushing ${queued.length} queued message(s)`);
+    for (const entry of queued) {
+      this.transmit(entry.type, entry.payload).then(entry.resolve).catch(entry.reject);
+    }
   }
 
   private startHeartbeat() {
@@ -169,9 +207,19 @@ export class WsClient {
 
   async send<T>(type: string, payload: object): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error('WebSocket not connected');
+      // Buffer the request and reconnect; flushOutbox() sends it once the socket
+      // is back up. This replaces the old throw-on-disconnect, which dropped the
+      // request the moment the SW woke before the WS reconnected (BUG 2).
+      return new Promise<T>((resolve, reject) => {
+        this.outbox.push({ type, payload, resolve, reject });
+        this.scheduleReconnect(true);
+      });
     }
 
+    return this.transmit<T>(type, payload);
+  }
+
+  private transmit<T>(type: string, payload: object): Promise<T> {
     const id = `req-${++this.messageId}-${crypto.randomUUID()}`;
     const request = { id, type, payload };
 
@@ -213,6 +261,10 @@ export class WsClient {
   ping(): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.sendBinary({ type: 'PING' });
+    } else {
+      // The SW just woke (keepalive/watchdog alarm): reconnect immediately so any
+      // queued messages flush, rather than waiting out the next backoff tick (BUG 2).
+      this.scheduleReconnect(true);
     }
   }
 
@@ -224,6 +276,12 @@ export class WsClient {
       this.reconnectTimer = null;
     }
     this.pending.forEach((_, id) => this.pending.delete(id));
+    // Reject queued messages — the client is shutting down and they will never
+    // be sent (BUG 2).
+    for (const entry of this.outbox) {
+      entry.reject(new Error('WebSocket closed'));
+    }
+    this.outbox = [];
     if (this.ws) {
       this.ws.close();
       this.ws = null;

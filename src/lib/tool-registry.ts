@@ -855,7 +855,6 @@ export class ToolRegistry {
       parameters: {
         type: 'object',
         properties: {
-          includeScreenshot: { type: 'boolean', default: false },
           includeMarkdown: { type: 'boolean', default: true },
         },
         additionalProperties: false,

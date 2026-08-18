@@ -250,7 +250,10 @@ export class MessageRouter {
 
   private async handleResumeTask(payload: unknown) {
     const { sessionId } = payload as { sessionId: string };
-    this.orchestrator.resume();
+    if (!sessionId) {
+      return { success: false, error: 'Missing sessionId' };
+    }
+    await this.orchestrator.resumeSession(sessionId);
     return { success: true };
   }
 

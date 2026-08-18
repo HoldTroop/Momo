@@ -932,11 +932,21 @@ export class AgentOrchestrator {
     }
   }
 
-  resume() {
-    if (this.state) {
-      this.state.paused = false;
-      this.persistState();
+  /**
+   * Load a specific persisted session by id and resume it (clear its pause
+   * flag). Unlike the previous in-memory-only `resume()`, this activates the
+   * exact session the caller asked for rather than whatever happens to be the
+   * current `this.state` (BUG 6).
+   */
+  async resumeSession(sessionId: string): Promise<void> {
+    const session = await this.persistence.getSession(sessionId);
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`);
     }
+    this.state = session;
+    this.activeSessionId = sessionId;
+    this.state.paused = false;
+    await this.persistState();
   }
 
   getState(): AgentState | null {

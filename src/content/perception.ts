@@ -33,22 +33,13 @@ function getTurndown(): TurndownService {
  */
 export function extractPerception(includeMarkdown: boolean = true): PerceptionResult {
   try {
-    // 1. Clone document to avoid mutating the page
-    const clone = document.cloneNode(true) as Document;
-
-    // 2. Readability
-    const reader = new Readability(clone);
-    const article = reader.parse();
-
-    if (!article) {
-      return emptyResult();
-    }
-
-    // 3. Annotate interactive elements with stable ref_ids
+    // 1. Annotate interactive elements with stable ref_ids on the LIVE DOM
+    //    first, so the clone taken below captures the same refs that a later
+    //    resolve-by-ref will match (BUG 4). The reading layer deliberately does
+    //    NOT render these refs into Markdown — refs are for action targeting.
     const refIdMap: Record<string, string> = {};
     let counter = 0;
 
-    // Walk the original document (not the clone) to attach ref_ids
     const walker = document.createTreeWalker(
       document.body,
       NodeFilter.SHOW_ELEMENT
@@ -66,7 +57,18 @@ export function extractPerception(includeMarkdown: boolean = true): PerceptionRe
       }
     }
 
-    // 4. Turndown → Markdown (if requested)
+    // 2. Clone the (now annotated) document for the reading pass. Readability
+    //    mutates its input, so it runs on a clone rather than the live page.
+    const clone = document.cloneNode(true) as Document;
+
+    // 3. Readability → Turndown on the clone.
+    const reader = new Readability(clone);
+    const article = reader.parse();
+
+    if (!article) {
+      return emptyResult();
+    }
+
     let markdown = '';
     if (includeMarkdown && article.content) {
       const turndown = getTurndown();
