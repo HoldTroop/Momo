@@ -68,7 +68,7 @@ export function isActionable(el: HTMLElement): boolean {
   return false;
 }
 
-function getImplicitRole(el: HTMLElement): string {
+export function getImplicitRole(el: HTMLElement): string {
   const tag = el.tagName.toLowerCase();
   const type = (el as HTMLInputElement).type;
   const roles: Record<string, string> = {

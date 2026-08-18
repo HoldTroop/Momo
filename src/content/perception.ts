@@ -3,7 +3,8 @@
 
 import Readability from '@mozilla/readability';
 import TurndownService from 'turndown';
-import { generateSelector, isActionable } from '../lib/selector.js';
+import { generateSelector, isActionable, getImplicitRole } from '../lib/selector.js';
+import { isSensitiveInput } from '../lib/redaction.js';
 
 export interface PerceptionResult {
   markdown_content: string;
@@ -139,6 +140,139 @@ export function resolveTarget(refId: string | undefined, selector: string | unde
   return null;
 }
 
+// --- Hybrid perception layer (Phase 9 M3) ------------------------------------
+// A parallel, *additive* element index keyed by `data-momo-ref="el_XX"`. It is
+// deliberately distinct from `data-momo-ref-id="momo-N"` (set by
+// extractPerception): MCP's execute_action targets el_XX refs via
+// resolveByRefStrict, which does NOT fall back to raw CSS selectors.
+
+export interface InteractiveElement {
+  ref: string;
+  role: string;
+  label: string;
+  state: string[];
+  tag: string;
+  bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    top: number;
+    right: number;
+    bottom: number;
+    left: number;
+  };
+}
+
+export interface InteractiveElementsResult {
+  url: string;
+  elements: InteractiveElement[];
+}
+
+export type RefResolution =
+  | { status: 'ok'; x: number; y: number; width: number; height: number }
+  | { status: 'stale_reference'; ref: string; hint: string };
+
+/** aria-label → textContent (≤100 chars) → value → placeholder. */
+function computeLabel(el: HTMLElement): string {
+  const aria = el.getAttribute('aria-label');
+  if (aria && aria.trim()) return aria.trim();
+
+  const text = (el.textContent || '').trim();
+  if (text) return text.slice(0, 100);
+
+  const input = el as HTMLInputElement;
+  // A sensitive field's value must never leak into the label; placeholder is
+  // static metadata and is safe (mirrors the AX extractor's isSensitive guard).
+  if (
+    input.value &&
+    !isSensitiveInput({ type: input.type, autocomplete: input.autocomplete, name: input.name, id: input.id })
+  ) {
+    return input.value.slice(0, 100);
+  }
+  return (input.placeholder || '').slice(0, 100);
+}
+
+function computeState(el: HTMLElement): string[] {
+  const state: string[] = [];
+  if (el.hasAttribute('disabled') || (el as HTMLInputElement).disabled) state.push('disabled');
+  if (el.hasAttribute('required')) state.push('required');
+  if (el.hasAttribute('readonly')) state.push('readonly');
+  if ((el as HTMLInputElement).checked === true) state.push('checked');
+  if (el.getAttribute('aria-invalid') === 'true') state.push('aria-invalid');
+  if (el === document.activeElement) state.push('focused');
+  return state;
+}
+
+/**
+ * Enumerate visible, actionable elements and tag each with a fresh
+ * `data-momo-ref="el_XX"` attribute (counter resets per call). Returns role,
+ * label, state, and bounds so an external agent can decide what to target.
+ */
+export function getInteractiveElements(): InteractiveElementsResult {
+  const elements: InteractiveElement[] = [];
+  let counter = 0;
+
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+  while (walker.nextNode()) {
+    const el = walker.currentNode as HTMLElement;
+    if (!isActionable(el) || !el.checkVisibility()) continue;
+
+    const ref = `el_${++counter}`;
+    // Additive: inject alongside the existing data-momo-ref-id. Do NOT migrate
+    // or touch the old attribute.
+    el.setAttribute('data-momo-ref', ref);
+
+    const rect = el.getBoundingClientRect();
+    elements.push({
+      ref,
+      role: el.getAttribute('role') || getImplicitRole(el),
+      label: computeLabel(el),
+      state: computeState(el),
+      tag: el.tagName.toLowerCase(),
+      bounds: {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        left: rect.left,
+      },
+    });
+  }
+
+  return { url: location.href, elements };
+}
+
+/**
+ * Resolve an el_XX ref strictly: no CSS-selector fallback. Any of missing,
+ * detached, hidden, non-actionable, or zero-sized yields `stale_reference`,
+ * telling the caller to re-fetch get_interactive_elements (M4 recovery).
+ */
+export function resolveByRefStrict(ref: string): RefResolution {
+  const stale = (): RefResolution => ({ status: 'stale_reference', ref, hint: 're-fetch get_interactive_elements' });
+
+  const el = document.querySelector(`[data-momo-ref="${ref}"]`) as HTMLElement | null;
+  if (!el || !el.isConnected || !el.checkVisibility() || !isActionable(el)) {
+    return stale();
+  }
+
+  const rect = el.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) {
+    return stale();
+  }
+
+  return {
+    status: 'ok',
+    x: rect.x + rect.width / 2,
+    y: rect.y + rect.height / 2,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
 // Initialize perception on load
 console.log('[Perception] Module loaded');
 
@@ -149,6 +283,8 @@ declare global {
     __perceptionFindByRefId: (refId: string) => HTMLElement | null;
     __perceptionResolveSelector: (selector: string) => { x: number; y: number; element: HTMLElement } | null;
     __perceptionResolveTarget: (refId: string | undefined, selector: string | undefined) => { x: number; y: number; element: HTMLElement } | null;
+    __perceptionGetInteractiveElements: () => InteractiveElementsResult;
+    __perceptionResolveByRefStrict: (ref: string) => RefResolution;
   }
 }
 
@@ -156,3 +292,5 @@ window.__perceptionExtract = extractPerception;
 window.__perceptionFindByRefId = findByRefId;
 window.__perceptionResolveSelector = resolveSelector;
 window.__perceptionResolveTarget = resolveTarget;
+window.__perceptionGetInteractiveElements = getInteractiveElements;
+window.__perceptionResolveByRefStrict = resolveByRefStrict;

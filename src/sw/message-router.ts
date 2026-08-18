@@ -34,12 +34,15 @@ export class MessageRouter {
     'EXTRACT',
   ]);
 
-  /** Bridge → extension commands the service worker will honor. M1 exposes only
-   * `get_status`; the full perception/action command set lands in M3 (§5, §6).
-   * Unknown commands are answered with a `CommandResult` error, never silently
-   * ignored, so the bridge's `send_command` cannot hang past its timeout. */
+  /** Bridge → extension commands the service worker will honor. M1 exposed only
+   * `get_status`; M3 adds the read-only perception commands (§5). execute_action
+   * lands in M4. Unknown commands are answered with a `CommandResult` error,
+   * never silently ignored, so the bridge's `send_command` cannot hang past its
+   * timeout. */
   private static readonly BRIDGE_COMMAND_ALLOWLIST: ReadonlySet<string> = new Set([
     'get_status',
+    'read_page_content',
+    'get_interactive_elements',
   ]);
 
   private wsClient: ReturnType<typeof getWsClient> | null = null;
@@ -96,9 +99,77 @@ export class MessageRouter {
           timestamp: Date.now(),
         };
       }
+      case 'read_page_content':
+        return await this.readPageContent(params);
+      case 'get_interactive_elements':
+        return await this.getInteractiveElements(params);
       default:
         throw new Error(`Unhandled bridge command: ${command}`);
     }
+  }
+
+  /** Resolve the tab a page-scoped command targets: an explicit `tab_id` or the active tab. */
+  private async resolveTargetTabId(params: unknown): Promise<number> {
+    const p = params as { tab_id?: unknown } | null;
+    if (p?.tab_id !== undefined) {
+      if (typeof p.tab_id !== 'number' || !Number.isInteger(p.tab_id)) {
+        throw new Error('tab_id must be an integer');
+      }
+      return p.tab_id;
+    }
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const id = tabs[0]?.id;
+    if (!id) throw new Error('No active tab');
+    return id;
+  }
+
+  /** Read-only: return the active page as Markdown (Readability + Turndown). */
+  private async readPageContent(params: unknown): Promise<unknown> {
+    const tabId = await this.resolveTargetTabId(params);
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: false },
+      func: () => {
+        // @ts-ignore - perception module is injected as a content script
+        return window.__perceptionExtract?.(true) ?? null;
+      },
+    });
+    const perception = results?.[0]?.result as {
+      markdown_content?: string;
+      ref_id_map?: Record<string, string>;
+      title?: string;
+      url?: string;
+    } | null;
+
+    return {
+      command: 'read_page_content',
+      status: 'ok',
+      title: perception?.title || '',
+      url: perception?.url || '',
+      markdown_content: perception?.markdown_content || '',
+      ref_id_map: perception?.ref_id_map || {},
+      page_revision: this.orchestrator.getState()?.pageRevision ?? 0,
+    };
+  }
+
+  /** Read-only: enumerate visible+interactive elements with stable el_XX refs. */
+  private async getInteractiveElements(params: unknown): Promise<unknown> {
+    const tabId = await this.resolveTargetTabId(params);
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: false },
+      func: () => {
+        // @ts-ignore - perception module is injected as a content script
+        return window.__perceptionGetInteractiveElements?.() ?? null;
+      },
+    });
+    const perception = results?.[0]?.result as { url?: string; elements?: unknown[] } | null;
+
+    return {
+      command: 'get_interactive_elements',
+      status: 'ok',
+      url: perception?.url || '',
+      page_revision: this.orchestrator.getState()?.pageRevision ?? 0,
+      elements: perception?.elements || [],
+    };
   }
 
   private registerHandlers() {

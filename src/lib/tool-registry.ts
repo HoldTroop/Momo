@@ -1121,6 +1121,163 @@ export class ToolRegistry {
         }
       },
     });
+
+    // execute_action — the MCP write tool (PHASE9 §5). Targets an el_XX ref
+    // returned by get_interactive_elements; `ref` is the ONLY targeting key, so
+    // there is NO raw-CSS-selector fallback. Reuses the click/type executors'
+    // CDP dispatch (dispatchMouseEvent / insertText) and the navigate executor.
+    // stale_reference is returned as a structured error for the bridge to map to
+    // isError:true (M4 wiring).
+    this.register({
+      name: 'execute_action',
+      description: 'Execute one action against a stable element ref (el_XX) from get_interactive_elements: click, type, scroll, or navigate. ref is the only targeting key; raw CSS selectors are rejected.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['click', 'type', 'scroll', 'navigate'], description: 'The action to perform.' },
+          ref: { type: 'string', description: 'Stable el_XX id from get_interactive_elements (required for click/type/scroll).' },
+          text: { type: 'string', description: 'Text to type (action=type only).' },
+          url: { type: 'string', format: 'uri', description: 'URL to navigate to (action=navigate only).' },
+        },
+        required: ['action'],
+        additionalProperties: false,
+      },
+      policy: {
+        riskClass: 'write',
+        requiresConfirmation: false,
+        reversible: false,
+        idempotent: false,
+        tokenCost: 10,
+      },
+      execute: async (args, context) => {
+        const action = args.action as string;
+        const ref = args.ref as string | undefined;
+        const text = args.text as string | undefined;
+        const url = args.url as string | undefined;
+
+        switch (action) {
+          case 'navigate': {
+            if (!url) {
+              return { success: false, error: 'Missing url for navigate', summary: 'execute_action navigate: missing url', navigationOccurred: false };
+            }
+            const navigateTool = this.tools.get('navigate');
+            if (!navigateTool) {
+              return { success: false, error: 'navigate unavailable', summary: 'execute_action navigate: unavailable', navigationOccurred: false };
+            }
+            return navigateTool.execute({ url }, context);
+          }
+
+          case 'scroll': {
+            const result = await chrome.scripting.executeScript({
+              target: { tabId: context.tabId, allFrames: false },
+              func: (r: string | undefined) => {
+                if (!r) {
+                  window.scrollBy(0, window.innerHeight * 0.8);
+                  return { success: true };
+                }
+                const el = document.querySelector(`[data-momo-ref="${r}"]`) as HTMLElement | null;
+                if (!el || !el.isConnected || !el.checkVisibility()) return { status: 'stale_reference', ref: r };
+                el.scrollTop += el.clientHeight * 0.8;
+                return { success: true };
+              },
+              args: [ref],
+            });
+            const res = result[0]?.result as { success?: boolean; status?: string } | undefined;
+            if (res && res.status === 'stale_reference') {
+              return { success: false, error: 'stale_reference', summary: `execute_action scroll: stale reference ${ref}`, data: { error: 'stale_reference', ref, hint: 're-fetch get_interactive_elements' }, navigationOccurred: false };
+            }
+            return { success: true, summary: `Scrolled ${ref ? `element ${ref}` : 'window'}`, navigationOccurred: false };
+          }
+
+          case 'click': {
+            if (!ref) {
+              return { success: false, error: 'Missing ref for click', summary: 'execute_action click: missing ref', navigationOccurred: false };
+            }
+            const origin = originOf(context.dom.url);
+
+            const { decision, actionHash } = await authorizeViaBridge({
+              type: 'POLICY_CHECK',
+              payload: { session_id: context.sessionId, action: 'click', origin, target: ref, arguments: { ref }, page_revision: context.pageRevision },
+            });
+            if (!decision || !decision.allowed) {
+              return { success: false, error: decision?.reason || 'Bridge unreachable', summary: `Click blocked: ${decision?.reason || 'bridge unreachable'}`, navigationOccurred: false, requiresConfirmation: decision?.requires_confirmation };
+            }
+            if (decision.requires_confirmation && !context.preAuthorized) {
+              return { success: false, error: 'Requires confirmation', summary: 'Click requires confirmation', navigationOccurred: false, requiresConfirmation: true, confirmationData: { origin, action: 'click', target: ref, data: { ref }, reversible: false, riskClass: decision.risk_class } };
+            }
+
+            const resolved = await this.resolveRefStrict(context.tabId, ref);
+            if (resolved.status !== 'ok') {
+              await reportActionResult(context.sessionId, actionHash, false, 'stale_reference');
+              return { success: false, error: 'stale_reference', summary: `execute_action click: stale reference ${ref}`, data: { error: 'stale_reference', ref, hint: 're-fetch get_interactive_elements' }, navigationOccurred: false };
+            }
+
+            const sessionId = await context.getCdpSession();
+            if (!sessionId) {
+              await reportActionResult(context.sessionId, actionHash, false, 'CDP session unavailable');
+              return { success: false, error: 'CDP session unavailable', summary: 'execute_action click: no CDP session', navigationOccurred: false };
+            }
+            try {
+              await cdpAdapter.dispatchMouseEvent(sessionId, 'mouseMoved', resolved.x, resolved.y);
+              await cdpAdapter.dispatchMouseEvent(sessionId, 'mousePressed', resolved.x, resolved.y);
+              await cdpAdapter.dispatchMouseEvent(sessionId, 'mouseReleased', resolved.x, resolved.y);
+            } catch (e) {
+              await reportActionResult(context.sessionId, actionHash, false, String(e));
+              return { success: false, error: String(e), summary: 'execute_action click failed', navigationOccurred: false };
+            }
+            await reportActionResult(context.sessionId, actionHash, true);
+            return { success: true, data: { ref, x: resolved.x, y: resolved.y }, summary: `Clicked ref ${ref}`, navigationOccurred: false };
+          }
+
+          case 'type': {
+            if (!ref) {
+              return { success: false, error: 'Missing ref for type', summary: 'execute_action type: missing ref', navigationOccurred: false };
+            }
+            if (text === undefined) {
+              return { success: false, error: 'Missing text for type', summary: 'execute_action type: missing text', navigationOccurred: false };
+            }
+            const origin = originOf(context.dom.url);
+
+            const focused = await this.focusRefStrict(context.tabId, ref);
+            if (focused.status !== 'ok') {
+              return { success: false, error: 'stale_reference', summary: `execute_action type: stale reference ${ref}`, data: { error: 'stale_reference', ref, hint: 're-fetch get_interactive_elements' }, navigationOccurred: false };
+            }
+            const fieldIsSensitive = isSensitiveInput(focused.field);
+
+            const { decision, actionHash } = await authorizeViaBridge({
+              type: 'POLICY_CHECK',
+              payload: { session_id: context.sessionId, action: 'type', origin, target: ref, arguments: { ref, text_length: text.length, field_is_sensitive: fieldIsSensitive }, page_revision: context.pageRevision },
+            });
+            if (!decision || !decision.allowed) {
+              return { success: false, error: decision?.reason || 'Bridge unreachable', summary: `Type blocked: ${decision?.reason || 'bridge unreachable'}`, navigationOccurred: false, requiresConfirmation: decision?.requires_confirmation };
+            }
+            if (decision.requires_confirmation && !context.preAuthorized) {
+              return { success: false, error: 'Requires confirmation', summary: 'Type requires confirmation', navigationOccurred: false, requiresConfirmation: true, confirmationData: { origin, action: 'type', target: ref, data: { ref, text: '[REDACTED]' }, reversible: false, riskClass: decision.risk_class } };
+            }
+            if (fieldIsSensitive && !context.preAuthorized) {
+              return { success: false, error: 'Sensitive field detected - requires human confirmation', summary: 'Type blocked: sensitive field', navigationOccurred: false, requiresConfirmation: true, confirmationData: { origin, action: 'type', target: ref, data: { ref, text: '[REDACTED]' }, reversible: false, riskClass: 'auth' } };
+            }
+
+            const sessionId = await context.getCdpSession();
+            if (!sessionId) {
+              await reportActionResult(context.sessionId, actionHash, false, 'CDP session unavailable');
+              return { success: false, error: 'CDP session unavailable', summary: 'execute_action type: no CDP session', navigationOccurred: false };
+            }
+            try {
+              await cdpAdapter.insertText(sessionId, text);
+            } catch (e) {
+              await reportActionResult(context.sessionId, actionHash, false, String(e));
+              return { success: false, error: String(e), summary: 'execute_action type failed', navigationOccurred: false };
+            }
+            await reportActionResult(context.sessionId, actionHash, true);
+            return { success: true, summary: `Typed into ref ${ref}`, navigationOccurred: false };
+          }
+
+          default:
+            return { success: false, error: `Unsupported action: ${action}`, summary: `Unsupported action: ${action}`, navigationOccurred: false };
+        }
+      },
+    });
   }
 
   /**
@@ -1151,6 +1308,56 @@ export class ToolRegistry {
       };
       chrome.tabs.onUpdated.addListener(listener);
     });
+  }
+
+  /** Strict-resolve an el_XX ref to its clickable center (no CSS fallback). */
+  private async resolveRefStrict(
+    tabId: number,
+    ref: string,
+  ): Promise<{ status: 'ok'; x: number; y: number } | { status: 'stale_reference' }> {
+    const probe = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: false },
+      func: (r: string) => {
+        // @ts-ignore - perception module injected globally
+        return window.__perceptionResolveByRefStrict?.(r) ?? { status: 'stale_reference', ref: r };
+      },
+      args: [ref],
+    });
+    const res = probe[0]?.result as
+      | { status: 'ok'; x: number; y: number }
+      | { status: 'stale_reference' }
+      | undefined;
+    if (res && res.status === 'ok') return { status: 'ok', x: res.x, y: res.y };
+    return { status: 'stale_reference' };
+  }
+
+  /** Strict-resolve an el_XX ref to a focusable input and capture its field descriptor. */
+  private async focusRefStrict(
+    tabId: number,
+    ref: string,
+  ): Promise<
+    | { status: 'ok'; field: { type: string; autocomplete: string; name: string; id: string } }
+    | { status: 'stale_reference' }
+  > {
+    const probe = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: false },
+      func: (r: string) => {
+        const el = document.querySelector(`[data-momo-ref="${r}"]`) as HTMLInputElement | HTMLTextAreaElement | null;
+        if (!el || !el.isConnected || !el.checkVisibility()) return { status: 'stale_reference', ref: r };
+        el.focus();
+        return {
+          status: 'ok',
+          field: { type: el.type || '', autocomplete: el.autocomplete || '', name: el.name || '', id: el.id || '' },
+        };
+      },
+      args: [ref],
+    });
+    const res = probe[0]?.result as
+      | { status: 'ok'; field: { type: string; autocomplete: string; name: string; id: string } }
+      | { status: 'stale_reference' }
+      | undefined;
+    if (res && res.status === 'ok') return { status: 'ok', field: res.field };
+    return { status: 'stale_reference' };
   }
 
   register(definition: ToolDefinition) {

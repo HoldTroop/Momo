@@ -16,8 +16,10 @@
  * framing was already exercised by the earlier NDJSON smoke test.)
  *
  * Modes:
- *   roundtrip — reply to the Command, expect isError:false + echoed result
- *   timeout   — never reply, expect command_timeout (isError:true)
+ *   roundtrip   — tools/call read_page_content, reply with a canned Markdown result
+ *   interactive — tools/call get_interactive_elements, reply with an elements array
+ *                 (role/label/state/bounds) to prove the bridge round-trips it
+ *   timeout     — never reply, expect command_timeout (isError:true)
  *
  * Env:
  *   BRIDGE_BIN              path to the binary (default ../target/debug/agent-bridge)
@@ -64,12 +66,13 @@ ws.onmessage = (event) => {
   if (msg.type === 'Ok' && msg.payload?.data?.status === 'ping') return; // heartbeat
   if (msg.type === 'Ok' && msg.payload?.data?.status === 'pong') {
     dbg('PONG received — connection registered. Sending tools/call to stdin.');
+    const tool = MODE === 'interactive' ? 'get_interactive_elements' : 'read_page_content';
     child.stdin.write(
       JSON.stringify({
         jsonrpc: '2.0',
         id: 7,
         method: 'tools/call',
-        params: { name: 'read_page_content', arguments: { tab_id: 17 } },
+        params: { name: tool, arguments: { tab_id: 17 } },
       }) + '\n',
     );
     return;
@@ -79,12 +82,45 @@ ws.onmessage = (event) => {
     if (MODE === 'timeout') {
       dbg('Command received; deliberately NOT replying (timeout path).');
     } else {
+      const command = msg.payload.command;
+      const result =
+        command === 'get_interactive_elements'
+          ? {
+              command,
+              status: 'ok',
+              url: 'https://example.com/page',
+              page_revision: 3,
+              elements: [
+                {
+                  ref: 'el_1',
+                  role: 'button',
+                  label: 'Save',
+                  state: [],
+                  tag: 'button',
+                  bounds: { x: 10, y: 20, width: 100, height: 50, top: 20, right: 110, bottom: 70, left: 10 },
+                },
+                {
+                  ref: 'el_2',
+                  role: 'textbox',
+                  label: 'Search',
+                  state: ['focused'],
+                  tag: 'input',
+                  bounds: { x: 10, y: 90, width: 200, height: 40, top: 90, right: 210, bottom: 130, left: 10 },
+                },
+              ],
+            }
+          : {
+              command,
+              status: 'ok',
+              title: 'Example',
+              url: 'https://example.com',
+              markdown_content: '# Heading\n\nBody',
+              ref_id_map: {},
+              page_revision: 2,
+            };
       const reply = {
         type: 'COMMAND_RESULT',
-        payload: {
-          request_id: msg.payload.request_id,
-          result: { title: 'Example', url: 'https://example.com', markdown_content: '# Heading\n\nBody' },
-        },
+        payload: { request_id: msg.payload.request_id, result },
       };
       ws.send(binFrame(reply));
       console.log('[WS  -> bridge  CommandResult] ' + JSON.stringify(reply));
