@@ -15,7 +15,7 @@ export default defineConfig({
         'content/ax-extractor': resolve(__dirname, 'src/content/ax-extractor.ts'),
         'content/dom-observer': resolve(__dirname, 'src/content/dom-observer.ts'),
         'content/human-input': resolve(__dirname, 'src/content/human-input.ts'),
-        'offscreen/index': resolve(__dirname, 'src/offscreen/index.ts'),
+        'content/perception': resolve(__dirname, 'src/content/perception.ts'),
         'sidepanel/index': resolve(__dirname, 'src/sidepanel/index.tsx'),
       },
       output: {

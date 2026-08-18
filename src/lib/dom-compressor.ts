@@ -1,5 +1,6 @@
 import { CompressedDom, ActionableElement, DomRect, LayoutNode } from '../sw/orchestrator.js';
 import { redactText } from './redaction.js';
+import { generateSelector, isActionable } from './selector.js';
 
 interface AxNode {
   role: string;

@@ -78,6 +78,8 @@ export interface ExecutionStep {
 export interface ToolCall {
   name: string;
   arguments: Record<string, unknown>;
+  /// Optional ref_id for stable element targeting (perception upgrade)
+  ref_id?: string;
 }
 
 export interface ToolResult {
@@ -113,6 +115,10 @@ export interface CompressedDom {
   summary: string;
   layout: LayoutNode;
   timestamp: number;
+  /// Optional Markdown content from Readability+Turndown (perception upgrade)
+  markdown_content?: string;
+  /// Optional selector → ref_id mapping for stable element targeting
+  ref_id_map?: Record<string, string>;
 }
 
 export interface ActionableElement {
@@ -1002,6 +1008,32 @@ export interface WalEntry {
   id: number;
   timestamp: number;
   operation: WalOperation;
+  data: unknown;
+}
+
+/** Bridge request/response types for WebSocket protocol. */
+export interface BridgeRequest {
+  id: string;
+  type: string;
+  payload: Record<string, unknown>;
+}
+
+export interface BridgeResponse {
+  type: 'Ok' | 'Error' | 'Event' | 'StreamChunk' | 'StreamEnd';
+  payload: BridgeResponsePayload;
+}
+
+export interface BridgeResponsePayload {
+  request_id?: string;
+  data?: unknown;
+  code?: number;
+  message?: string;
+  event?: string;
+  chunk?: unknown;
+}
+
+export interface BridgeEvent {
+  event: string;
   data: unknown;
 }
 

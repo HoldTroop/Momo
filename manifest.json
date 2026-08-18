@@ -11,10 +11,8 @@
   },
 
   "permissions": [
-    "nativeMessaging",
     "storage",
     "alarms",
-    "offscreen",
     "tabs",
     "scripting",
     "sidePanel",
@@ -22,8 +20,7 @@
   ],
 
   "optional_permissions": [
-    "debugger",
-    "pushMessaging"
+    "debugger"
   ],
 
   "host_permissions": [],
@@ -39,19 +36,12 @@
         "dist/content/ax-extractor.js",
         "dist/content/dom-observer.js",
         "dist/content/human-input.js",
+        "dist/content/perception.js",
         "dist/lib/automation-hygiene.js"
       ],
       "world": "ISOLATED",
       "run_at": "document_idle",
       "all_frames": true
-    }
-  ],
-
-  "offscreen_documents": [
-    {
-      "url": "dist/offscreen/index.html",
-      "reasons": ["WORKERS", "AUDIO_PLAYBACK"],
-      "justification": "Long-running ML inference, autonomous watchdog"
     }
   ],
 

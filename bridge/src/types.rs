@@ -58,6 +58,8 @@ pub struct ExecutionStep {
 pub struct ToolCall {
     pub name: String,
     pub arguments: serde_json::Value,
+    /// Optional ref_id for stable element targeting (perception upgrade)
+    pub ref_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +87,10 @@ pub struct CompressedDom {
     pub summary: String,
     pub layout: LayoutNode,
     pub timestamp: i64,
+    /// Optional Markdown content from Readability+Turndown (perception upgrade)
+    pub markdown_content: Option<String>,
+    /// Optional selector → ref_id mapping for stable element targeting
+    pub ref_id_map: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,4 +178,16 @@ pub enum WalOperation {
     TaskQueued,
     TaskCompleted,
     TaskFailed,
+}
+
+/// Observation payload submitted by the extension after local perception.
+/// Contains the compressed DOM, Markdown content, and ref_id mapping.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObservationSubmit {
+    pub session_id: String,
+    pub origin: String,
+    pub dom: CompressedDom,
+    pub markdown_content: String,
+    pub ref_id_map: std::collections::HashMap<String, String>,
+    pub page_revision: u64,
 }

@@ -15,13 +15,16 @@
     "dexie": "^4.0.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "superjson": "^2.2.6"
+    "superjson": "^2.2.6",
+    "@mozilla/readability": "^0.4.4",
+    "turndown": "^7.1.2"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.268",
     "@types/node": "^26.2.0",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
+    "@types/turndown": "^5.0.4",
     "@typescript-eslint/eslint-plugin": "^8.67.0",
     "@typescript-eslint/parser": "^8.67.0",
     "@vitejs/plugin-react": "^4.2.0",

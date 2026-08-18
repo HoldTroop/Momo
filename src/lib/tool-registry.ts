@@ -1,6 +1,7 @@
-import { ToolCall, ToolResult, CompressedDom } from '../sw/orchestrator.js';
+import { ToolCall, ToolResult, CompressedDom, BridgeRequest, BridgeResponse } from '../sw/orchestrator.js';
 import { cdpAdapter } from '../sw/cdp-adapter.js';
 import { isSensitiveInput } from './redaction.js';
+import { getWsClient } from '../sw/ws-client.js';
 
 export type RiskClass = 'read' | 'write' | 'navigation' | 'payment' | 'auth' | 'dangerous';
 
@@ -58,10 +59,11 @@ interface AuthResult {
   actionHash: string | null;
 }
 
-/** Send an authorization request to the bridge and return its policy decision (null if unreachable). */
+/** Send an authorization request to the bridge via WebSocket and return its policy decision. */
 async function authorizeViaBridge(request: Record<string, unknown>): Promise<AuthResult> {
   try {
-    const response = await chrome.runtime.sendNativeMessage('agent.bridge', request);
+    const wsClient = getWsClient();
+    const response = await wsClient.send<BridgeResponse>('POLICY_CHECK', request);
     const data = response?.payload?.data as { decision?: PolicyDecision; action_hash?: string } | null;
     return {
       decision: data?.decision ?? null,
@@ -82,14 +84,12 @@ async function authorizeViaBridge(request: Record<string, unknown>): Promise<Aut
 async function reportActionResult(sessionId: string, actionHash: string | null, success: boolean, error?: string): Promise<void> {
   if (!actionHash) return;
   try {
-    await chrome.runtime.sendNativeMessage('agent.bridge', {
-      type: 'ACTION_RESULT',
-      payload: {
-        session_id: sessionId,
-        action_hash: actionHash,
-        outcome: success ? 'success' : 'failed',
-        error: error ?? null,
-      },
+    const wsClient = getWsClient();
+    await wsClient.send('ACTION_RESULT', {
+      session_id: sessionId,
+      action_hash: actionHash,
+      outcome: success ? 'success' : 'failed',
+      error: error ?? null,
     });
   } catch (e) {
     console.warn('[ToolRegistry] Report action result failed:', e);
@@ -265,6 +265,7 @@ export class ToolRegistry {
           selector: { type: 'string', description: 'CSS selector' },
           xpath: { type: 'string', description: 'XPath selector (alternative)' },
           text: { type: 'string', description: 'Visible text for disambiguation' },
+          ref_id: { type: 'string', description: 'Stable ref_id from perception for targeting' },
         },
         required: ['selector'],
         additionalProperties: false,
@@ -272,7 +273,7 @@ export class ToolRegistry {
       policy: {
         riskClass: 'write',
         requiresConfirmation: false,
-        reversible: false, // clicks are generally not reversible
+        reversible: false,
         idempotent: false,
         tokenCost: 10,
       },
@@ -280,17 +281,19 @@ export class ToolRegistry {
         const selector = args.selector as string;
         const xpath = args.xpath as string | undefined;
         const textHint = args.text as string | undefined;
+        const refId = args.ref_id as string | undefined;
         const origin = originOf(context.dom.url);
 
         // The bridge is the authoritative policy gate for write actions.
+        // Include ref_id in arguments for audit trail.
         const { decision, actionHash } = await authorizeViaBridge({
           type: 'POLICY_CHECK',
           payload: {
             session_id: context.sessionId,
             action: 'click',
             origin,
-            target: selector,
-            arguments: { selector },
+            target: refId || selector,
+            arguments: { selector, ref_id: refId },
             page_revision: context.pageRevision,
           },
         });
@@ -315,8 +318,8 @@ export class ToolRegistry {
             confirmationData: {
               origin,
               action: 'click',
-              target: selector,
-              data: { selector },
+              target: refId || selector,
+              data: { selector, ref_id: refId },
               reversible: false,
               riskClass: decision.risk_class,
             },
@@ -324,15 +327,33 @@ export class ToolRegistry {
         }
 
         // Resolve the element's clickable center via the content script (read-only),
-        // honoring the optional xpath/text disambiguation params (MOMO-077), then
-        // dispatch a trusted CDP mouse click at those coordinates instead of a
+        // honoring the optional xpath/text disambiguation params (MOMO-077) and ref_id,
+        // then dispatch a trusted CDP mouse click at those coordinates instead of a
         // synthetic el.click() (MOMO-019/080).
         const probe = await chrome.scripting.executeScript({
           target: { tabId: context.tabId, allFrames: false },
-          func: (sel: string, xp: string | undefined, hint: string | undefined) => {
-            // Resolve candidates via XPath or CSS selector; a malformed
-            // selector/XPath yields a clean structured error instead of throwing
-            // out of the injection (MOMO-117).
+          func: (sel: string, xp: string | undefined, hint: string | undefined, rId: string | undefined) => {
+            // Try ref_id first for stable targeting
+            let el: HTMLElement | null = null;
+            if (rId) {
+              // @ts-ignore - perception module injected globally
+              el = window.__perceptionFindByRefId?.(rId) || null;
+              if (el && el.checkVisibility()) {
+                const rect = el.getBoundingClientRect();
+                return {
+                  success: true,
+                  x: rect.x + rect.width / 2,
+                  y: rect.y + rect.height / 2,
+                  text: el.textContent?.slice(0, 100) || '',
+                  tag: el.tagName.toLowerCase(),
+                  bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+                  destructive: false,
+                  label: (el.textContent || '').slice(0, 50),
+                };
+              }
+            }
+
+            // Fall back to XPath/selector
             let candidates: Element[] = [];
             if (xp) {
               try {
@@ -353,7 +374,7 @@ export class ToolRegistry {
             }
 
             // Disambiguate among matches by visible text when a hint is supplied.
-            const el = (hint
+            el = (hint
               ? candidates.find(c => (c.textContent || '').toLowerCase().includes(hint.toLowerCase()))
               : candidates[0]) as HTMLElement | null;
 
@@ -460,13 +481,14 @@ export class ToolRegistry {
           text: { type: 'string', description: 'Text to type' },
           clearFirst: { type: 'boolean', default: true },
           pressEnter: { type: 'boolean', default: false },
+          ref_id: { type: 'string', description: 'Stable ref_id from perception for targeting' },
         },
         required: ['selector', 'text'],
         additionalProperties: false,
       },
       policy: {
         riskClass: 'write',
-        requiresConfirmation: false, // content script can detect password fields
+        requiresConfirmation: false,
         reversible: false,
         idempotent: false,
         tokenCost: 5,
@@ -476,19 +498,21 @@ export class ToolRegistry {
         const text = args.text as string;
         const clearFirst = args.clearFirst as boolean ?? true;
         const pressEnter = args.pressEnter as boolean ?? false;
+        const refId = args.ref_id as string | undefined;
         const origin = originOf(context.dom.url);
 
         // The bridge is the authoritative policy gate for write actions. The
         // typed text is redacted to its length so the secret never reaches the
         // audit log (mirroring the bridge's own SimulateType handling).
+        // Include ref_id in arguments for audit trail.
         const { decision, actionHash } = await authorizeViaBridge({
           type: 'POLICY_CHECK',
           payload: {
             session_id: context.sessionId,
             action: 'type',
             origin,
-            target: selector,
-            arguments: { selector, text_length: text.length },
+            target: refId || selector,
+            arguments: { selector, ref_id: refId, text_length: text.length },
             page_revision: context.pageRevision,
           },
         });
@@ -513,8 +537,8 @@ export class ToolRegistry {
             confirmationData: {
               origin,
               action: 'type',
-              target: selector,
-              data: { selector, text: '[REDACTED]', clearFirst, pressEnter },
+              target: refId || selector,
+              data: { selector, ref_id: refId, text: '[REDACTED]', clearFirst, pressEnter },
               reversible: false,
               riskClass: decision.risk_class,
             },
@@ -525,10 +549,19 @@ export class ToolRegistry {
         // single content-script injection (MOMO-118): the sensitive check and the
         // focus happen atomically on the same element so the target cannot be
         // swapped to a sensitive input between the check and the write.
+        // Try ref_id first for stable targeting.
         const probe = await chrome.scripting.executeScript({
           target: { tabId: context.tabId, allFrames: false },
-          func: (sel: string, clear: boolean) => {
-            const el = document.querySelector(sel) as HTMLInputElement | HTMLTextAreaElement | null;
+          func: (sel: string, clear: boolean, rId: string | undefined) => {
+            // Try ref_id first
+            let el: HTMLInputElement | HTMLTextAreaElement | null = null;
+            if (rId) {
+              // @ts-ignore - perception module injected globally
+              el = window.__perceptionFindByRefId?.(rId) as HTMLInputElement | HTMLTextAreaElement | null;
+            }
+            if (!el) {
+              el = document.querySelector(sel) as HTMLInputElement | HTMLTextAreaElement | null;
+            }
             if (!el) return { success: false, error: 'Element not found' };
             if (!el.checkVisibility()) return { success: false, error: 'Element not visible' };
 
@@ -548,7 +581,7 @@ export class ToolRegistry {
               },
             };
           },
-          args: [selector, clearFirst],
+          args: [selector, clearFirst, refId],
         });
 
         const res = probe[0]?.result;
@@ -669,16 +702,17 @@ export class ToolRegistry {
       },
     });
 
-    // Extract - read operation
+    // Extract - read operation with perception (Readability+Turndown)
     this.register({
       name: 'extract',
-      description: 'Extract structured data from page',
+      description: 'Extract structured data from page with Markdown content and ref_id mapping',
       parameters: {
         type: 'object',
         properties: {
           selector: { type: 'string', description: 'CSS selector' },
           schema: { type: 'object', description: 'JSON schema for extraction' },
           multiple: { type: 'boolean', default: false },
+          includeMarkdown: { type: 'boolean', default: true },
         },
         required: ['selector', 'schema'],
         additionalProperties: false,
@@ -696,37 +730,60 @@ export class ToolRegistry {
         const selector = args.selector as string;
         const schema = args.schema as Record<string, { selector?: string; attribute?: string; text?: boolean }>;
         const multiple = args.multiple as boolean ?? false;
+        const includeMarkdown = args.includeMarkdown as boolean ?? true;
 
-        const result = await chrome.scripting.executeScript({
-          target: { tabId: context.tabId, allFrames: false },
-          func: (sel: string, sch: Record<string, { selector?: string; attribute?: string; text?: boolean }>, multi: boolean) => {
-            const elements = (multi
-              ? Array.from(document.querySelectorAll(sel))
-              : [document.querySelector(sel)].filter(Boolean)) as Element[];
+        // Run both extraction and perception in parallel
+        const [extractResult, perceptionResult] = await Promise.all([
+          chrome.scripting.executeScript({
+            target: { tabId: context.tabId, allFrames: false },
+            func: (sel: string, sch: Record<string, { selector?: string; attribute?: string; text?: boolean }>, multi: boolean) => {
+              const elements = (multi
+                ? Array.from(document.querySelectorAll(sel))
+                : [document.querySelector(sel)].filter(Boolean)) as Element[];
 
-            return elements.map(el => {
-              const data: Record<string, unknown> = {};
-              for (const [key, spec] of Object.entries(sch)) {
-                if (spec.selector) {
-                  const child = el.querySelector(spec.selector);
-                  data[key] = spec.attribute ? child?.getAttribute(spec.attribute) : child?.textContent?.trim();
-                } else if (spec.attribute) {
-                  data[key] = el.getAttribute(spec.attribute);
-                } else if (spec.text) {
-                  data[key] = el.textContent?.trim();
+              return elements.map(el => {
+                const data: Record<string, unknown> = {};
+                for (const [key, spec] of Object.entries(sch)) {
+                  if (spec.selector) {
+                    const child = el.querySelector(spec.selector);
+                    data[key] = spec.attribute ? child?.getAttribute(spec.attribute) : child?.textContent?.trim();
+                  } else if (spec.attribute) {
+                    data[key] = el.getAttribute(spec.attribute);
+                  } else if (spec.text) {
+                    data[key] = el.textContent?.trim();
+                  }
                 }
-              }
-              return data;
-            });
-          },
-          args: [selector, schema, multiple],
-        });
+                return data;
+              });
+            },
+            args: [selector, schema, multiple],
+          }),
+          chrome.scripting.executeScript({
+            target: { tabId: context.tabId, allFrames: false },
+            func: (includeMd: boolean) => {
+              // @ts-ignore - perception module is injected via content script
+              return window.__perceptionExtract(includeMd);
+            },
+            args: [includeMarkdown],
+          }),
+        ]);
 
-        const data = result[0]?.result || [];
+        const data = extractResult[0]?.result || [];
+        const perception = perceptionResult[0]?.result as {
+          markdown_content: string;
+          ref_id_map: Record<string, string>;
+          title: string;
+          url: string;
+          timestamp: number;
+        } | null;
 
         return {
           success: true,
-          data,
+          data: {
+            items: data,
+            markdown_content: perception?.markdown_content || '',
+            ref_id_map: perception?.ref_id_map || {},
+          },
           summary: `Extracted ${data.length} item(s) from ${selector}`,
           navigationOccurred: false,
         };
@@ -791,14 +848,15 @@ export class ToolRegistry {
       },
     });
 
-    // Observe - read operation
+    // Observe - read operation with perception (Readability+Turndown)
     this.register({
       name: 'observe',
-      description: 'Get current page state',
+      description: 'Get current page state with Markdown content and ref_id mapping',
       parameters: {
         type: 'object',
         properties: {
           includeScreenshot: { type: 'boolean', default: false },
+          includeMarkdown: { type: 'boolean', default: true },
         },
         additionalProperties: false,
       },
@@ -811,9 +869,36 @@ export class ToolRegistry {
       },
       execute: async (args, context) => {
         deductTokens(context.tokenBudget, 50);
+        const includeMarkdown = args.includeMarkdown as boolean ?? true;
+
+        // Run perception in content script
+        const perceptionResult = await chrome.scripting.executeScript({
+          target: { tabId: context.tabId, allFrames: false },
+          func: (includeMd: boolean) => {
+            // @ts-ignore - perception module is injected via content script
+            return window.__perceptionExtract(includeMd);
+          },
+          args: [includeMarkdown],
+        });
+
+        const perception = perceptionResult[0]?.result as {
+          markdown_content: string;
+          ref_id_map: Record<string, string>;
+          title: string;
+          url: string;
+          timestamp: number;
+        } | null;
+
+        // Augment the DOM snapshot with perception data
+        const augmentedDom = {
+          ...context.dom,
+          markdown_content: perception?.markdown_content || '',
+          ref_id_map: perception?.ref_id_map || {},
+        };
+
         return {
           success: true,
-          data: context.dom,
+          data: augmentedDom,
           summary: `Observed page: ${context.dom.title}`,
           navigationOccurred: false,
         };
@@ -823,14 +908,15 @@ export class ToolRegistry {
     // Human click - write operation via bridge (trusted events)
     this.register({
       name: 'human_click',
-      description: 'Perform human-like click at coordinates via CDP Input API',
+      description: 'Perform human-like click at coordinates or by ref_id via CDP Input API',
       parameters: {
         type: 'object',
         properties: {
           x: { type: 'number' },
           y: { type: 'number' },
+          ref_id: { type: 'string', description: 'Stable ref_id from perception for targeting' },
         },
-        required: ['x', 'y'],
+        required: [],
         additionalProperties: false,
       },
       policy: {
@@ -841,9 +927,36 @@ export class ToolRegistry {
         tokenCost: 10,
       },
       execute: async (args, context) => {
-        const x = args.x as number;
-        const y = args.y as number;
+        const refId = args.ref_id as string | undefined;
+        let x = args.x as number | undefined;
+        let y = args.y as number | undefined;
         const origin = originOf(context.dom.url);
+
+        // If ref_id provided, resolve to coordinates first
+        if (refId && (x === undefined || y === undefined)) {
+          const probe = await chrome.scripting.executeScript({
+            target: { tabId: context.tabId, allFrames: false },
+            func: (rId: string) => {
+              // @ts-ignore - perception module injected globally
+              const el = window.__perceptionFindByRefId?.(rId) as HTMLElement | null;
+              if (!el || !el.checkVisibility()) return { success: false, error: 'Element not found or not visible' };
+              const rect = el.getBoundingClientRect();
+              return { success: true, x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+            },
+            args: [refId],
+          });
+          const res = probe[0]?.result;
+          if (!res || !res.success) {
+            return { success: false, error: res?.error || 'Failed to resolve ref_id', summary: `Human click failed: ${res?.error}`, navigationOccurred: false };
+          }
+          x = res.x;
+          y = res.y;
+        }
+
+        if (x === undefined || y === undefined) {
+          return { success: false, error: 'Either (x, y) or ref_id must be provided', summary: 'Human click failed: missing coordinates', navigationOccurred: false };
+        }
+
         const target = `coords(${x},${y})`;
 
         // The bridge is the authoritative policy gate: never dispatch a trusted
@@ -895,11 +1008,12 @@ export class ToolRegistry {
     // Human type - write operation via bridge (trusted events)
     this.register({
       name: 'human_type',
-      description: 'Perform human-like typing via CDP Input API',
+      description: 'Perform human-like typing via CDP Input API (supports ref_id for targeting)',
       parameters: {
         type: 'object',
         properties: {
           text: { type: 'string' },
+          ref_id: { type: 'string', description: 'Stable ref_id from perception for targeting' },
         },
         required: ['text'],
         additionalProperties: false,
@@ -913,8 +1027,36 @@ export class ToolRegistry {
       },
       execute: async (args, context) => {
         const text = args.text as string;
+        const refId = args.ref_id as string | undefined;
         const origin = originOf(context.dom.url);
-        const target = 'focused-element';
+        let target = 'focused-element';
+
+        // If ref_id provided, focus that element first
+        if (refId) {
+          const focusRes = await chrome.scripting.executeScript({
+            target: { tabId: context.tabId, allFrames: false },
+            func: (rId: string) => {
+              // @ts-ignore - perception module injected globally
+              const el = window.__perceptionFindByRefId?.(rId) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+              if (!el || !el.checkVisibility()) return { success: false, error: 'Element not found or not visible' };
+              el.focus();
+              return {
+                success: true,
+                type: (el as HTMLInputElement).type || '',
+                autocomplete: (el as HTMLInputElement).autocomplete || '',
+                name: (el as HTMLInputElement).name || '',
+                id: (el as HTMLInputElement).id || '',
+              };
+            },
+            args: [refId],
+          });
+          const res = focusRes[0]?.result;
+          if (!res || !res.success) {
+            return { success: false, error: res?.error || 'Failed to resolve ref_id', summary: `Human type failed: ${res?.error}`, navigationOccurred: false };
+          }
+          target = `ref_id(${refId})`;
+          const fieldIsSensitive = isSensitiveInput(res);
+        }
 
         // Resolve the currently-focused element so the bridge can make an
         // informed sensitive-field decision for selector-less (focused-element)

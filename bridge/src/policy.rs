@@ -8,7 +8,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use url::Url;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,7 +139,7 @@ pub struct ConfirmationData {
 
 pub struct PolicyEngine {
     config: RwLock<PolicyConfig>,
-    db: Arc<RwLock<Connection>>,
+    db: Arc<Mutex<Connection>>,
     token_usage: RwLock<u64>,
     last_reset: RwLock<DateTime<Utc>>,
 }
@@ -151,7 +151,7 @@ impl PolicyEngine {
 
         Ok(Self {
             config: RwLock::new(PolicyConfig::default()),
-            db: Arc::new(RwLock::new(db)),
+            db: Arc::new(Mutex::new(db)),
             token_usage: RwLock::new(0),
             last_reset: RwLock::new(Utc::now()),
         })
@@ -191,7 +191,7 @@ impl PolicyEngine {
     }
 
     pub fn load_config(&self) -> Result<()> {
-        let db = self.db.read();
+        let db = self.db.lock().unwrap();
         let mut stmt = db.prepare("SELECT key, value FROM policy_config")?;
         let rows = stmt.query_map([], |row| {
             let key: String = row.get(0)?;
@@ -216,7 +216,7 @@ impl PolicyEngine {
     }
 
     pub fn save_config(&self, config: &PolicyConfig) -> Result<()> {
-        let mut db = self.db.write();
+        let mut db = self.db.lock().unwrap();
         let tx = db.transaction()?;
 
         let now = Utc::now().to_rfc3339();
@@ -457,7 +457,7 @@ impl PolicyEngine {
     }
 
     pub fn log_audit(&self, entry: &AuditEntry) -> Result<()> {
-        let db = self.db.write();
+        let db = self.db.lock().unwrap();
         db.execute(
             r#"
             INSERT INTO audit_log (
@@ -495,7 +495,7 @@ impl PolicyEngine {
         outcome: AuditOutcome,
         error: Option<String>,
     ) -> Result<usize> {
-        let db = self.db.write();
+        let db = self.db.lock().unwrap();
         let changed = db.execute(
             "UPDATE audit_log SET outcome = ?, error = ? WHERE action_hash = ? AND session_id = ?",
             params![
@@ -509,7 +509,7 @@ impl PolicyEngine {
     }
 
     pub fn get_audit_log(&self, session_id: Option<&str>, limit: usize) -> Result<Vec<AuditEntry>> {
-        let db = self.db.read();
+        let db = self.db.lock().unwrap();
         let mut query = String::from("SELECT id, timestamp, session_id, action, origin, target, arguments, risk_class, outcome, action_hash, page_revision, user_confirmed, error FROM audit_log");
         let mut params_vec = vec![];
 

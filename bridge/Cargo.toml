@@ -16,7 +16,13 @@ dashmap = "5.0"
 url = "2.0"
 reqwest = { version = "0.11", features = ["json", "stream", "rustls-tls"] }
 futures = "0.3"
+futures-util = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 dirs = "5.0"
 md-5 = "0.10"
+axum = { version = "0.7", features = ["ws", "tokio"] }
+tokio-tungstenite = "0.21"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors"] }
+uuid = { version = "1", features = ["v4", "serde"] }

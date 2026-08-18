@@ -3,26 +3,27 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
+use axum::{routing::get, Router};
 use dirs;
 use md5::{Digest, Md5};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use tokio::net::TcpListener;
+use tower_http::cors::CorsLayer;
 use tracing::{debug, error, info, warn};
 
 mod llm;
 mod policy;
 mod types;
+mod ws_server;
 
-use llm::{ChatMessage, LlmGateway, Tool};
+use llm::{LlmGateway};
 use policy::{PolicyConfig, PolicyEngine, PolicyRequest};
+use ws_server::{ConnectionManager, ws_router};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "SCREAMING_SNAKE_CASE")]
 enum BridgeRequest {
-    // LLM Operations
-    LlmComplete { model: String, messages: Vec<ChatMessage>, tools: Option<Vec<Tool>>, stream: bool },
-    LlmStream { model: String, messages: Vec<ChatMessage>, tools: Option<Vec<Tool>> },
-
     // Input authorization (policy gate). The extension executes the authorized
     // action via chrome.debugger; the bridge never touches CDP directly.
     SimulateClick { session_id: String, origin: String, target: String, x: f64, y: f64, page_revision: u64 },
@@ -38,6 +39,10 @@ enum BridgeRequest {
     PolicyGetConfig,
     PolicySetConfig { config: PolicyConfig },
     PolicyGetAuditLog { session_id: Option<String>, limit: usize },
+
+    // Perception — read-only, no policy gate (local to extension)
+    Observe { session_id: String, origin: String, include_markdown: bool, page_revision: u64 },
+    Extract { session_id: String, origin: String, selector: String, schema: serde_json::Value, include_markdown: bool, page_revision: u64 },
 
     // Bridge Management
     Ping,
@@ -131,8 +136,8 @@ impl BridgeServer {
         }))
     }
 
-    async fn handle_request(&self, request: BridgeRequest) -> Result<BridgeResponse> {
-        let request_id = self.next_request_id();
+    async fn handle_request(&self, request: BridgeRequest, client_id: Option<String>) -> Result<BridgeResponse> {
+        let request_id = client_id.unwrap_or_else(|| self.next_request_id());
 
         match request {
             BridgeRequest::Ping => {
@@ -150,18 +155,6 @@ impl BridgeServer {
                         "policy_config": self.policy_engine.get_config(),
                     })
                 })
-            }
-
-            BridgeRequest::LlmComplete { model, messages, tools, stream: _stream } => {
-                // Native Messaging is strictly request/response, so streaming is
-                // not deliverable over this transport; return the full completion.
-                let result = self.llm_gateway.complete(&model, messages, tools).await?;
-                Ok(BridgeResponse::Ok { request_id, data: result })
-            }
-
-            BridgeRequest::LlmStream { model, messages, tools } => {
-                let result = self.llm_gateway.complete(&model, messages, tools).await?;
-                Ok(BridgeResponse::Ok { request_id, data: result })
             }
 
             BridgeRequest::SimulateClick { session_id, origin, target, x, y, page_revision } => {
@@ -263,6 +256,33 @@ impl BridgeServer {
                 })
             }
 
+            BridgeRequest::Observe { session_id, origin, include_markdown, page_revision } => {
+                // Read-only perception — no policy gate, no token cost.
+                // The extension captures the DOM and markdown locally; this request
+                // merely acknowledges receipt and returns a correlation ID.
+                let data = serde_json::json!({
+                    "acknowledged": true,
+                    "session_id": session_id,
+                    "origin": origin,
+                    "include_markdown": include_markdown,
+                    "page_revision": page_revision,
+                });
+                Ok(BridgeResponse::Ok { request_id, data })
+            }
+
+            BridgeRequest::Extract { session_id, origin, selector, schema: _, include_markdown, page_revision } => {
+                // Read-only extraction — no policy gate.
+                let data = serde_json::json!({
+                    "acknowledged": true,
+                    "session_id": session_id,
+                    "origin": origin,
+                    "selector": selector,
+                    "include_markdown": include_markdown,
+                    "page_revision": page_revision,
+                });
+                Ok(BridgeResponse::Ok { request_id, data })
+            }
+
             BridgeRequest::Shutdown => {
                 info!("Shutdown requested");
                 std::process::exit(0);
@@ -281,29 +301,66 @@ async fn main() -> Result<()> {
     info!("Starting Autonomous AI Agent Bridge Server");
 
     let server = Arc::new(BridgeServer::new()?);
+    let connection_manager = Arc::new(ConnectionManager::new(server.clone()));
 
-    // Read from stdin (Native Messaging protocol)
+    // Check for legacy stdio mode (for transition period)
+    let legacy_stdio = std::env::args().any(|arg| arg == "--legacy-stdio");
+
+    if legacy_stdio {
+        info!("Running in legacy native-messaging mode (stdio)");
+        run_legacy_stdio(server).await?;
+    } else {
+        // WebSocket server mode
+        let app = Router::new()
+            .merge(ws_router(connection_manager.clone()))
+            .route("/health", get(|| async { "ok" }))
+            .layer(CorsLayer::permissive());
+
+        // Bind to ephemeral port on localhost
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+
+        // Write port to well-known file for extension discovery
+        if let Some(port_file) = dirs::home_dir().map(|h| h.join(".momo").join("bridge_port")) {
+            if let Some(parent) = port_file.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            std::fs::write(&port_file, port.to_string()).ok();
+            info!("Bridge port written to {:?}", port_file);
+        }
+
+        // Also set env var for processes that inherit it
+        std::env::set_var("MOMO_BRIDGE_WS_PORT", port.to_string());
+
+        info!("Bridge WS listening on ws://127.0.0.1:{port}/ws");
+        info!("Health endpoint: http://127.0.0.1:{port}/health");
+
+        axum::serve(listener, app).await?;
+    }
+
+    info!("Bridge server shutting down");
+    Ok(())
+}
+
+async fn run_legacy_stdio(server: Arc<BridgeServer>) -> Result<()> {
     let stdin = io::stdin();
     let mut reader = BufReader::new(stdin.lock());
     let mut stdout = io::stdout();
 
-    // Native Messaging: first 4 bytes = message length (little-endian)
     let mut length_buf = [0u8; 4];
 
     loop {
-        // Read message length
         if reader.read_exact(&mut length_buf).is_err() {
             debug!("Stdin closed, exiting");
             break;
         }
 
         let length = u32::from_le_bytes(length_buf) as usize;
-        if length > 10_000_000 { // 10MB max
+        if length > 10_000_000 {
             warn!("Message too large: {} bytes", length);
             break;
         }
 
-        // Read message body
         let mut msg_buf = vec![0u8; length];
         if reader.read_exact(&mut msg_buf).is_err() {
             debug!("Failed to read message body");
@@ -318,7 +375,7 @@ async fn main() -> Result<()> {
             }
         };
 
-        let response = server.handle_request(request).await.unwrap_or_else(|e| {
+        let response = server.handle_request(request, None).await.unwrap_or_else(|e| {
             BridgeResponse::Error {
                 request_id: "unknown".to_string(),
                 code: -1,
@@ -326,7 +383,6 @@ async fn main() -> Result<()> {
             }
         });
 
-        // Write response
         let response_bytes = match serde_json::to_vec(&response) {
             Ok(bytes) => bytes,
             Err(e) => {
@@ -343,6 +399,5 @@ async fn main() -> Result<()> {
         stdout.flush().ok();
     }
 
-    info!("Bridge server shutting down");
     Ok(())
 }

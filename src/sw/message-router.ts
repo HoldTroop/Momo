@@ -1,5 +1,7 @@
-import { AgentOrchestrator, HumanResponse } from './orchestrator.js';
+import { AgentOrchestrator, HumanResponse, BridgeEvent } from './orchestrator.js';
 import { cdpAdapter } from './cdp-adapter.js';
+import { getWsClient, initWsClient } from './ws-client.js';
+import { discoverBridgeUrl } from './bridge-port.js';
 
 export class MessageRouter {
   private orchestrator: AgentOrchestrator;
@@ -17,7 +19,7 @@ export class MessageRouter {
     DOM: new Set(['getDocument', 'querySelector', 'getBoxModel', 'getContentQuads', 'getNodeForLocation', 'getOuterHTML']),
   };
 
-  /** Bridge request types that may be proxied; mutating/destructive ops are excluded. */
+  /** Bridge request types that may be proxied via WebSocket; mutating/destructive ops are excluded. */
   private static readonly BRIDGE_REQUEST_ALLOWLIST: ReadonlySet<string> = new Set([
     'PING',
     'GET_STATUS',
@@ -28,11 +30,30 @@ export class MessageRouter {
     'SIMULATE_TYPE',
     'SIMULATE_SCROLL',
     'SIMULATE_MOUSE_MOVE',
+    'OBSERVE',
+    'EXTRACT',
   ]);
+
+  private wsClient: ReturnType<typeof getWsClient> | null = null;
 
   constructor(orchestrator: AgentOrchestrator) {
     this.orchestrator = orchestrator;
+    this.initWsClient();
     this.registerHandlers();
+  }
+
+  private async initWsClient() {
+    try {
+      this.wsClient = initWsClient(this.handleBridgeEvent.bind(this));
+      await this.wsClient.connect();
+    } catch (e) {
+      console.error('[MessageRouter] Failed to initialize WS client:', e);
+    }
+  }
+
+  private handleBridgeEvent(event: BridgeEvent) {
+    // Forward async events (policy_changed, audit_log_append, etc.) to side panel
+    chrome.runtime.sendMessage({ type: 'BRIDGE_EVENT', payload: event });
   }
 
   private registerHandlers() {
@@ -52,10 +73,8 @@ export class MessageRouter {
     this.handlers.set('CDP_GET_TARGETS', this.handleCdpGetTargets.bind(this));
     this.handlers.set('CDP_DETACH', this.handleCdpDetach.bind(this));
 
-    // Offscreen → bridge proxy (the offscreen document no longer runs an LLM;
-    // it only relays native-messaging requests and hosts the kill switch).
+    // Bridge requests via WebSocket (replaces native-messaging proxy)
     this.handlers.set('BRIDGE_REQUEST', this.handleBridgeRequest.bind(this));
-    this.handlers.set('PERSIST_STATE', this.handlePersistState.bind(this));
     this.handlers.set('OFFSCREEN_KILLED', this.handleOffscreenKilled.bind(this));
   }
 
@@ -219,14 +238,19 @@ export class MessageRouter {
     }
   }
 
-  /** Proxy a request to the native bridge and unwrap its data, surfacing Error envelopes. */
-  private async proxyToBridge(payload: unknown): Promise<unknown> {
+  /** Send a request via WebSocket to the bridge and unwrap its data. */
+  private async sendToBridge(payload: object): Promise<unknown> {
+    if (!this.wsClient) {
+      return { error: 'Bridge WebSocket not connected' };
+    }
     try {
-      const response = await chrome.runtime.sendNativeMessage('agent.bridge', payload as object);
-      if (response?.type === 'Error') {
-        return { error: response?.payload?.message ?? 'Native host error' };
+      const request = payload as { type?: string } | null;
+      const type = request?.type;
+      if (!type) {
+        return { error: 'Missing request type' };
       }
-      return response?.payload?.data ?? response?.payload ?? response;
+      const response = await this.wsClient.send<unknown>(type, payload);
+      return response;
     } catch (e) {
       return { error: String(e) };
     }
@@ -238,7 +262,7 @@ export class MessageRouter {
     if (!type || !MessageRouter.BRIDGE_REQUEST_ALLOWLIST.has(type)) {
       return { error: `Bridge request type not allowed: ${type ?? 'missing'}` };
     }
-    return this.proxyToBridge(payload);
+    return this.sendToBridge(payload);
   }
 
   private async handlePersistState() {
@@ -248,10 +272,12 @@ export class MessageRouter {
 
   private async handleOffscreenKilled() {
     // Propagate the kill switch: cancel in-flight bridge work and abort the task.
-    try {
-      await chrome.runtime.sendNativeMessage('agent.bridge', { type: 'SHUTDOWN' });
-    } catch {
-      // Bridge may already be gone; best effort.
+    if (this.wsClient) {
+      try {
+        await this.wsClient.send('SHUTDOWN', {});
+      } catch {
+        // Bridge may already be gone; best effort.
+      }
     }
     await this.orchestrator.abortTask('Offscreen kill switch activated', true);
     return { success: true };
