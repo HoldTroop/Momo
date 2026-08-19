@@ -24,7 +24,7 @@ npm install
 # Build the extension (Vite → dist/)
 npm run build
 
-# Build the native messaging host (Rust → bridge/target/release/agent-bridge)
+# Build the native messaging host (Rust → target/release/agent-bridge)
 npm run build:bridge
 
 # Build everything
@@ -108,9 +108,8 @@ environment, and — for bugs — numbered reproduction steps and any logs.
 src/
 ├── sw/           Service worker: orchestrator, message router, alarms, CDP adapter
 ├── content/      Content scripts: AX extractor, DOM observer, human input fallback
-├── offscreen/    Offscreen document: LLM worker, watchdog, metrics, kill switch
-├── sidepanel/    React side panel UI
-└── lib/          Persistence (Dexie/WAL), task queue, tool registry, LLM client
-bridge/           Rust native messaging host (CDP, InputExecutor, policy engine, LLM gateway)
-tests/            Test suite
+├── sidepanel/    React side panel UI (Stop button = kill switch, STOP_TASK)
+└── lib/          Persistence (Dexie/WAL), task queue, tool registry, LLM client, redaction
+bridge/           Rust bridge (CDP, InputExecutor, policy engine, LLM gateway)
+src/**/*.test.ts  Unit tests, co-located with sources (redaction, dom-compressor, perception)
 ```

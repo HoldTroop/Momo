@@ -130,7 +130,7 @@ No changes to Mode A's *external* behavior. The dual-mode dispatcher in `main()`
 
 Two sub-processes coexist inside the single binary:
 - **MCP stdio loop** — speaks newline-delimited JSON-RPC 2.0 to the MCP client.
-- **WebSocket server loop** — the *same* `ConnectionManager` + `BridgeServer` used in Mode A, so the extension connects exactly as it does today (via `~/.momo/bridge_port` discovery).
+- **WebSocket server loop** — the *same* `ConnectionManager` + `BridgeServer` used in Mode A, so the extension connects exactly as it does today: it scans 9090-9100 for a `/health` responder returning `ok` (`discoverBridgeUrl`, `src/sw/bridge-port.ts`).
 
 The MCP layer translates `tools/call` into either:
 - a direct `BridgeServer::handle_request` call (for policy/config/status read ops), or
@@ -156,7 +156,7 @@ A dedicated `momo-mcp-server` crate is tempting, but it would duplicate `PolicyE
 momo-bridge                    → Mode A (current default)
 momo-bridge --legacy-stdio     → Mode A native-messaging (existing, preserved)
 momo-bridge --mcp              → Mode B: MCP over stdio
-momo-bridge --mcp --port FILE  → Mode B with explicit bridge_port file override (testing)
+momo-bridge --mcp --port FILE  → Mode B with explicit port-file override for the mock-extension harness (testing)
 ```
 
 Dispatch logic:
@@ -173,15 +173,14 @@ Dispatch logic:
 
 Mode B must still accept the extension's WebSocket connection, because the MCP client has **no** direct path to the extension. Therefore Mode B runs the same `axum` `ws_router` + `ConnectionManager` in a background task, and the MCP stdio loop runs on the main task. Both share `Arc<BridgeServer>` and `Arc<ConnectionManager>`.
 
-Port discovery is unchanged: write the ephemeral port to `~/.momo/bridge_port` (the extension's `discoverBridgePort` already reads it). One caveat — **concurrent Mode A + Mode B on the same machine would race on `bridge_port`.** Mitigation (documented, not silently ignored):
+Port discovery is unchanged: the bridge binds a fixed port in the 9090-9100 range, and the extension scans that range for a `/health` responder returning body `ok` (`discoverBridgeUrl`, `src/sw/bridge-port.ts`). The old `~/.momo` port file is gone — the extension has no filesystem access — and `--port FILE` exists only as a test hook for the mock-extension harness. One caveat — **concurrent Mode A + Mode B on the same machine would race on the fixed 9090-9100 range.** Mitigation (documented, not silently ignored):
 
 - Treat Mode A and Mode B as *mutually exclusive* deployments (document it in README).
-- Optionally write a distinct `~/.momo/mcp_bridge_port` in Mode B so a running Mode A is not clobbered; the extension reads the standard file, so this only helps when the user points the extension at the MCP bridge manually. This is a follow-up, not a Phase-9 blocker.
 
 ### 3.3 Mode B control flow
 
 ```
-[spawn] WS server task  ── listens 127.0.0.1:0, writes bridge_port, serves extension
+[spawn] WS server task  ── binds fixed port in 9090-9100, serves extension
 [main]  MCP stdio loop  ── reads NDJSON JSON-RPC from stdin, writes NDJSON to stdout
 ```
 
@@ -320,7 +319,7 @@ Four MCP tools. The split is deliberate and reflects the analysis: **reading ≠
       "role": "button",                 // implicit/ARIA role
       "label": "Place order",           // accessible name / textContent / value
       "tag": "button",
-      "state": { "disabled": false, "checked": null, "required": false, "focused": false },
+      "state": ["disabled", "required"],  // string[] — see computeState in src/content/perception.ts: disabled | required | readonly | checked | aria-invalid | focused
       "bounds": { "x": 120, "y": 340, "width": 140, "height": 40 }
     }
     // … only interactive + visible nodes, in DOM order
@@ -373,7 +372,7 @@ Four MCP tools. The split is deliberate and reflects the analysis: **reading ≠
 ### 5.4 `list_tabs`
 
 - **Purpose:** enumerate the browser's tabs so the LLM can target a specific tab via `tab_id` on the page-scoped tools. Multi-tab orchestration is a core use case (e.g. "fill the form on tab 3, then read the results on tab 1").
-- **Implementation:** `chrome.tabs.query({})` in the service worker — no content-script injection, no CDP.
+- **Implementation:** `chrome.tabs.query({})` in the service worker — no content-script injection, no CDP. **Implemented (Batch 4):** handled extension-side by `listTabs()` in the `CommandDispatcher` (`src/sw/message-router.ts`); the bridge's `list_tabs` tool (`bridge/src/mcp_tools.rs`) is a thin `Command` passthrough.
 - **Returns:**
 
 ```jsonc
@@ -421,7 +420,7 @@ BridgeRequest::CommandResult { request_id: String, result: serde_json::Value }
 | `read_page_content` | `{ tab_id? }` | `extractPerception` via `chrome.scripting.executeScript({ tabId })` | `read_page_content` tool |
 | `get_interactive_elements` | `{ tab_id? }` | `getInteractiveElements()` content-script injection | `get_interactive_elements` tool |
 | `execute_action` | `{ action, ref?, text?, url?, tab_id? }` | `AgentOrchestrator.executeToolCall` with strict-ref resolution | `execute_action` tool |
-| `list_tabs` | `{}` | `chrome.tabs.query({})` in the SW | `list_tabs` tool |
+| `list_tabs` | `{}` | `chrome.tabs.query({})` in the SW (implemented Batch 4 — see §5.4) | `list_tabs` tool |
 
 > The `execute_action` command deliberately re-enters `AgentOrchestrator.executeToolCall` (the same ingress used by the internal run loop and the existing `EXECUTE_TOOL` message) so that policy gating, CDP execution, confirmation, redaction, and audit reporting are **identical** in Mode A and Mode B. There is exactly one code path for "perform a click."
 
@@ -438,7 +437,7 @@ This is an explicit contract, not an implementation detail. The MCP client (LLM)
 **Timeout behavior (bridge side).** A `Command` that receives no `CommandResult` within the timeout (default 30 s, matching the extension's existing `WsClient` timeout) resolves as a **tool-level error**, not a JSON-RPC error:
 
 ```jsonc
-{ "error": "command_timeout", "command": "execute_action", "request_id": "req-42" }
+{ "error": "command_timeout", "command": "execute_action" }
 ```
 
 **Disconnect behavior.** If no extension is connected to the WebSocket when a Command is issued, `send_command` fails immediately (does not wait for the timeout):
@@ -534,7 +533,7 @@ Three layered decisions:
 **D2 — Policy boundary: MCP mode inherits and *hardens* the existing PolicyEngine.**
 - Every `execute_action` flows through `authorize()` → `PolicyEngine::evaluate()`, which is **fail-closed**: an empty origin allowlist denies navigation and all origin-scoped actions.
 - **MCP-specific hardening** (the one deliberate delta from Mode A):
-  - `permitted_actions` empty currently means "allow all" in `check_action_permitted`. For MCP mode, we flip the default to **deny by default**: MCP mode requires an explicit `permitted_actions` list (or inherits the persisted one) before any `execute_action` is accepted. This makes a fresh, unconfigured MCP deployment inert until the user opts in.
+  - `permitted_actions` empty currently means "allow all" in `check_action_permitted`. For MCP mode, the default is flipped to **deny by default**: MCP mode requires an explicit `permitted_actions` list (or inherits the persisted one) before any `execute_action` is accepted. This makes a fresh, unconfigured MCP deployment inert until the user opts in. **Implemented:** `PolicyEngine::set_mcp_mode(true)` is wired from `--mcp` in `bridge/src/main.rs`; `check_action_permitted` returns false on an empty list in MCP mode (`bridge/src/policy.rs`).
   - `confirmation_policy` defaults to **Sensitive** (unchanged), so irreversible/`auth`-class actions (form submit, credential fields) still surface a user-visible confirmation in the side panel.
 
 **D3 — Scope/allowlist + user-visible confirmation: yes to both.**
@@ -557,7 +556,7 @@ Three layered decisions:
 1. Fresh MCP install = deny-by-default (empty allowlist + deny-by-default permitted-actions) → read-only until configured.
 2. Sensitive actions always require in-browser confirmation (cannot be bypassed over stdio).
 3. Every MCP action is written to the same `policy.db` audit log as Mode A.
-4. Mode A and Mode B are mutually exclusive deployments (shared `bridge_port`).
+4. Mode A and Mode B are mutually exclusive deployments (they compete for the fixed 9090-9100 port range).
 
 ---
 
@@ -605,7 +604,7 @@ Because the shim injects `--mcp`, the client config stays minimal and stable acr
 
 ### 9.4 Distribution caveats (called out, not hidden)
 
-- The npm package ships the **bridge binary**, not the extension. The extension is still installed from the Chrome Web Store / unpacked. The MCP server cannot function until the extension is running and connected to the same `bridge_port`.
+- The npm package ships the **bridge binary**, not the extension. The extension is still installed from the Chrome Web Store / unpacked. The MCP server cannot function until the extension is running and connected to the bridge's WebSocket (auto-discovered via the 9090-9100 `/health` scan).
 - Platform matrix must be built in CI (GitHub Actions matrix over linux/darwin/windows × x64/arm64). Cross-compilation for darwin-arm64 from linux is non-trivial; plan for native runners.
 - Prebuilt binaries are unsigned; on macOS this triggers Gatekeeper prompts. Document `xattr -d com.apple.quarantine` or codesigning as a follow-up.
 
@@ -660,7 +659,7 @@ Because the shim injects `--mcp`, the client config stays minimal and stable acr
 
 | Risk | Mitigation |
 |---|---|
-| `bridge_port` race (Mode A vs Mode B) | Document mutual exclusivity; distinct `mcp_bridge_port` as follow-up. |
+| Port-range race (Mode A vs Mode B) | Document mutual exclusivity; the fixed 9090-9100 range is first-come, first-served. |
 | Deny-by-default surprises users | README + first-run stderr guidance ("seed allowlist or only read-only tools work"). |
 | Stale-ref churn on highly dynamic SPAs | The `stale_reference` hint drives LLM re-fetch; consider `page_revision` check to short-circuit known-stale refs early. |
 | NDJSON framing divergence across MCP SDKs | Target the 2024-11-05 spec; verify against `@modelcontextprotocol/sdk` stdio transport in CI. |
@@ -675,7 +674,7 @@ Because the shim injects `--mcp`, the client config stays minimal and stable acr
 2. **M2 — MCP stdio skeleton:** `--mcp` flag, NDJSON loop, `initialize`/`ping`/`tools/list` with the four tool schemas (stubbed), conforming to MCP 2024-11-05 (§4.4).
 3. **M3 — Hybrid perception tools + tab targeting:** `getInteractiveElements()` + `resolveByRefStrict()` in the content script; wire `read_page_content` and `get_interactive_elements` end-to-end; **`list_tabs` tool and optional `tab_id` threading on every page-scoped tool** (not deferred — multi-tab is core).
 4. **M4 — `execute_action` + stale-ref recovery:** strict-ref resolution, `stale_reference` error, re-entrant `executeToolCall` with `tab_id` support.
-5. **M5 — Trust hardening + npm:** MCP-mode deny-by-default, README trust docs, Node shim, CI platform builds, `npx @momo/mcp-server` smoke test.
+5. **M5 — Trust hardening + npm:** MCP-mode deny-by-default (**implemented:** `set_mcp_mode` + `--mcp` wiring in `main.rs`/`policy.rs`), README trust docs, Node shim, CI platform builds, `npx @momo/mcp-server` smoke test.
 
 ---
 

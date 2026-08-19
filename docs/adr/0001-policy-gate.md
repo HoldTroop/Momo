@@ -1,4 +1,4 @@
-# ADR-0001: Human-in-the-loop policy gate lives in the Rust native-messaging bridge
+# ADR-0001: Human-in-the-loop policy gate lives in the Rust bridge
 
 ## Status
 
@@ -21,14 +21,14 @@ failure cannot silently cross.
 
 ## Decision
 
-The authoritative policy gate lives in the Rust native-messaging host
-(`agent.bridge`, `bridge/src/policy.rs`) — a separate OS-level process outside the
+The authoritative policy gate lives in the Rust bridge
+(`bridge/src/policy.rs`) — a separate OS-level process outside the
 extension's JavaScript trust domain.
 
 - Every DOM write tool calls `authorizeViaBridge(...)` (TypeScript,
   `src/lib/tool-registry.ts`), which forwards a `POLICY_CHECK` /
-  `SIMULATE_CLICK` / `SIMULATE_TYPE` request over
-  `chrome.runtime.sendNativeMessage('agent.bridge', ...)`.
+  `SIMULATE_CLICK` / `SIMULATE_TYPE` request over the authenticated localhost
+  WebSocket (`src/sw/ws-client.ts`).
 - The Rust side evaluates each request in `PolicyEngine::evaluate`, in order:
   1. `check_origin` — domain allowlist. An empty allowlist fails closed (deny
      all). A wildcard entry (`*.example.com`) matches the apex plus subdomains
@@ -60,7 +60,7 @@ extension's JavaScript trust domain.
 - **Policy checks in content scripts.** Rejected: content scripts run in the
   page's world and are the least-trusted context; they are a data source, not a
   control point.
-- **Native-messaging Rust policy engine (chosen).** Provides an OS-level trust
+- **Rust policy engine outside the JS runtime (chosen).** Provides an OS-level trust
   boundary, fail-closed enforcement, and audit logging outside the JS runtime.
 
 ## Consequences
@@ -71,7 +71,7 @@ Positive:
 - Sensitive-field confirmation and audit logging are enforced outside the JS layer.
 
 Negative / trade-offs:
-- Every write action now pays a native-messaging round-trip (added latency).
+- Every write action now pays a bridge round-trip over the WebSocket (added latency).
 - The policy engine assumes `chrome.debugger` is the sole trusted-input path and
   does not independently verify input provenance.
 - Sensitive-field detection for focused `human_type` depends on the TS side
@@ -87,3 +87,11 @@ Negative / trade-offs:
 - Security fixes captured in the graph: #1 (click/type gate), #2 (focused
   human_type sensitivity), #3 (confirmation events to side panel), #4 (SW
   suspension detach).
+- **Transport (updated):** the gate no longer rides native messaging. `POLICY_CHECK`
+  requests travel over the authenticated localhost WebSocket
+  (`ws://127.0.0.1:9090-9100/ws`, discovered by scanning `/health` — see
+  `src/sw/bridge-port.ts`), presenting a per-install token from
+  `~/.momo/auth_token` in an `AUTH` frame (`src/sw/ws-client.ts`). The bridge
+  rejects non-`chrome-extension://` Origins at the handshake
+  (`bridge/src/ws_server.rs`). The decision — a Rust-side gate outside the JS
+  trust domain — is unchanged.

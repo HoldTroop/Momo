@@ -164,6 +164,9 @@ return ws.send(request.type, request.payload);
 - `SHUTDOWN` → `ws.close()` + bridge process exit (bridge handles WS close).
 
 ### 3.4 Offscreen Document
+
+> **Status: completed.** The offscreen document was deleted; the kill switch is now the side panel's Stop button / `STOP_TASK`.
+
 - **Delete** the offscreen document entirely — it existed only for native-messaging + LLM.
 - `PortManager` no longer accepts `'offscreen'` port type.
 - Kill switch (`OFFSCREEN_KILLED`) becomes a simple `ws.close()` + `orchestrator.abortTask()`.

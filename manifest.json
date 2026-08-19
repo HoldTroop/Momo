@@ -48,13 +48,6 @@
     "default_path": "dist/sidepanel/index.html"
   },
 
-  "web_accessible_resources": [
-    {
-      "resources": ["injected/*.js"],
-      "matches": ["<all_urls>"]
-    }
-  ],
-
   "externally_connectable": {
     "matches": ["*://localhost/*", "*://127.0.0.1/*"]
   },
@@ -78,12 +71,5 @@
     "32": "icons/icon-32.png",
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
-  },
-
-  "browser_specific_settings": {
-    "gecko": {
-      "id": "autonomous-agent@local",
-      "strict_min_version": "115.0"
-    }
   }
 }

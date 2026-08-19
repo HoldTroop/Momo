@@ -57,9 +57,9 @@ sole input path; the Rust bridge is the authoritative policy boundary.
   `tabId` with `allFrames: false` instead of fanning out to every frame.
 - **H8 — Kill switch propagates.** `OFFSCREEN_KILLED` now sends `SHUTDOWN` to the
   bridge and aborts the running task.
-- **H9 — Offscreen LLM fallback wired.** `llm-worker.ts` routes through the
-  service worker (`BRIDGE_REQUEST`) instead of a broken `MessageChannel` port
-  handshake.
+- **H9 — LLM traffic consolidated through the Rust bridge.** There is no
+  `llm-worker.ts`; LLM calls route through the service worker to the bridge's
+  `LlmGateway` over the authenticated WebSocket.
 - **M1 — Real session identity.** Tasks now carry an explicit `sessionId` field
   instead of deriving it from the task-id string.
 - **M2 — Stale-task recovery.** `task-queue.ts` requeues stranded
@@ -104,7 +104,7 @@ tasks using your authenticated sessions, residential IP, and local hardware.
 ### 💥 Breaking Changes
 
 - First functional release — no prior extension code to migrate from (`v0.1.0-legacy` was an empty README scaffold).
-- `debugger` and `<all_urls>` permissions moved to `optional_permissions` / `optional_host_permissions`; the user is prompted on first CDP attach and first cross-origin access.
+- `debugger` and `<all_urls>` permissions moved to `optional_permissions` / `optional_host_permissions`; the `debugger` permission is now requested at runtime via `chrome.permissions.request` on first CDP attach (`ensureDebuggerPermission`, `src/lib/permissions.ts`), and denial degrades gracefully (CDP stays disabled until granted).
 - Native messaging host (`bridge/agent.bridge.json`) must be installed with `__EXTENSION_ID__` replaced by the loaded extension's ID.
 
 ### 🚀 Features
@@ -168,7 +168,7 @@ npm install
 # Build extension (Vite → dist/)
 npm run build
 
-# Build native messaging host (Rust → bridge/target/release/agent-bridge)
+# Build native messaging host (Rust → target/release/agent-bridge)
 npm run build:bridge
 
 # Or build both

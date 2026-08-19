@@ -190,7 +190,13 @@ ws.onmessage = (event) => {
 };
 
 ws.onerror = (e) => dbg('WS error', e?.message ?? e);
-ws.onclose = (e) => dbg('WS closed', e.code, e.reason);
+ws.onclose = (e) => {
+  if (!finished) {
+    dbg('WS closed before completion');
+    process.exit(1);
+  }
+  dbg('WS closed', e.code, e.reason);
+};
 
 let buf = '';
 child.stdout.on('data', (d) => {
