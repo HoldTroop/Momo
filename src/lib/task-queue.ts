@@ -4,8 +4,9 @@ import { TaskQueueEntry, TaskType, RetryPolicy, TaskStatus } from '../sw/orchest
 export class TaskQueue {
   private persistence: PersistenceManager;
   private processing = false;
+  private inFlight = false;
   private sessionId: string | null = null;
-  private processorInterval: number | null = null;
+  private processorInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(persistence: PersistenceManager) {
     this.persistence = persistence;
@@ -37,7 +38,7 @@ export class TaskQueue {
     // `pending` forever and can no longer starve the queue (MOMO-071).
     await this.persistence.sweepExpiredPendingTasks(sessionId);
 
-    this.processorInterval = window.setInterval(async () => {
+    this.processorInterval = setInterval(async () => {
       const currentSessionId = this.sessionId;
       if (!currentSessionId) return;
       try {

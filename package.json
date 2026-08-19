@@ -9,14 +9,15 @@
     "build:bridge": "cd bridge && cargo build --release",
     "build:all": "npm run build:bridge && npm run build",
     "test": "vitest run",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@mozilla/readability": "^0.4.4",
     "dexie": "^4.0.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "superjson": "^2.2.6",
-    "@mozilla/readability": "^0.4.4",
     "turndown": "^7.1.2"
   },
   "devDependencies": {

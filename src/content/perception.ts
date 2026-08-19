@@ -1,7 +1,7 @@
 // Perception module using Readability.js + Turndown.js
 // Produces Markdown with stable ref_id anchors for element targeting.
 
-import Readability from '@mozilla/readability';
+import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import { generateSelector, isActionable, getImplicitRole } from '../lib/selector.js';
 import { isSensitiveInput } from '../lib/redaction.js';

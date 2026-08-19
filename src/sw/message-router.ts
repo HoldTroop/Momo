@@ -400,24 +400,11 @@ export class MessageRouter {
     if (!type || !MessageRouter.BRIDGE_REQUEST_ALLOWLIST.has(type)) {
       return { error: `Bridge request type not allowed: ${type ?? 'missing'}` };
     }
-    return this.sendToBridge(payload);
+    return this.sendToBridge(payload as object);
   }
 
   private async handlePersistState() {
     await this.orchestrator.persistState();
-    return { success: true };
-  }
-
-  private async handleOffscreenKilled() {
-    // Propagate the kill switch: cancel in-flight bridge work and abort the task.
-    if (this.wsClient) {
-      try {
-        await this.wsClient.send('SHUTDOWN', {});
-      } catch {
-        // Bridge may already be gone; best effort.
-      }
-    }
-    await this.orchestrator.abortTask('Offscreen kill switch activated', true);
     return { success: true };
   }
 }

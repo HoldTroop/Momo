@@ -1,6 +1,7 @@
 import { BridgeRequest, BridgeResponse, BridgeEvent, BridgeCommand } from '../sw/orchestrator.js';
+import { discoverBridgeUrl } from './bridge-port.js';
 
-type PendingResolver = (resp: BridgeResponse) => void;
+type PendingResolver = (result: Promise<unknown>) => void;
 
 /** A request buffered while the socket is down, flushed on reconnect (BUG 2). */
 type OutboxEntry = {
@@ -12,7 +13,7 @@ type OutboxEntry = {
 
 export class WsClient {
   private ws: WebSocket | null = null;
-  private url: string;
+  private url = '';
   private pending = new Map<string, PendingResolver>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
@@ -195,7 +196,7 @@ export class WsClient {
       }
 
       // Handle PONG (both WebSocket-level and application-level)
-      if (response.type === 'Ok' && response.payload.data?.status === 'pong') {
+      if (response.type === 'Ok' && (response.payload.data as { status?: string } | undefined)?.status === 'pong') {
         return;
       }
 
@@ -231,7 +232,7 @@ export class WsClient {
 
       this.pending.set(id, (result: Promise<unknown>) => {
         clearTimeout(timeout);
-        result.then(resolve).catch(reject);
+        result.then((value) => resolve(value as T)).catch(reject);
       });
 
       this.sendBinary(request);

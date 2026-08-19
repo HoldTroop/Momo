@@ -1,4 +1,4 @@
-import { ToolCall, ToolResult, CompressedDom, BridgeRequest, BridgeResponse } from '../sw/orchestrator.js';
+import { ToolCall, ToolResult, CompressedDom, BridgeRequest } from '../sw/orchestrator.js';
 import { cdpAdapter } from '../sw/cdp-adapter.js';
 import { isSensitiveInput } from './redaction.js';
 import { getWsClient } from '../sw/ws-client.js';
@@ -63,8 +63,7 @@ interface AuthResult {
 async function authorizeViaBridge(request: Record<string, unknown>): Promise<AuthResult> {
   try {
     const wsClient = getWsClient();
-    const response = await wsClient.send<BridgeResponse>('POLICY_CHECK', request);
-    const data = response?.payload?.data as { decision?: PolicyDecision; action_hash?: string } | null;
+    const data = await wsClient.send<{ decision?: PolicyDecision; action_hash?: string } | null>('POLICY_CHECK', request);
     return {
       decision: data?.decision ?? null,
       actionHash: data?.action_hash ?? null,
@@ -284,135 +283,162 @@ export class ToolRegistry {
         const refId = args.ref_id as string | undefined;
         const origin = originOf(context.dom.url);
 
-        // The bridge is the authoritative policy gate for write actions.
-        // Include ref_id in arguments for audit trail.
-        const { decision, actionHash } = await authorizeViaBridge({
-          type: 'POLICY_CHECK',
-          payload: {
-            session_id: context.sessionId,
-            action: 'click',
-            origin,
-            target: refId || selector,
-            arguments: { selector, ref_id: refId },
-            page_revision: context.pageRevision,
-          },
-        });
-
-        if (!decision || !decision.allowed) {
-          return {
-            success: false,
-            error: decision?.reason || 'Bridge unreachable',
-            summary: `Click blocked: ${decision?.reason || 'bridge unreachable'}`,
-            navigationOccurred: false,
-            requiresConfirmation: decision?.requires_confirmation,
-          };
+        // Injection defense: ref_id must match the perception format before it
+        // is handed to the bridge or the content script.
+        if (refId !== undefined && !/^momo-\d+$/.test(refId)) {
+          return { success: false, error: 'Invalid ref_id format', summary: 'Click failed: invalid ref_id format', navigationOccurred: false };
         }
 
-        if (decision.requires_confirmation && !context.preAuthorized) {
-          return {
-            success: false,
-            error: 'Requires confirmation',
-            summary: 'Click requires confirmation',
-            navigationOccurred: false,
-            requiresConfirmation: true,
-            confirmationData: {
-              origin,
+        // The bridge is the authoritative policy gate for write actions.
+        // Include ref_id in arguments for audit trail. When preAuthorized, the
+        // human already approved this exact action: skip the bridge so the
+        // token ledger is not double-charged.
+        let decision: PolicyDecision | null = null;
+        let actionHash: string | null = null;
+        if (!context.preAuthorized) {
+          const auth = await authorizeViaBridge({
+            type: 'POLICY_CHECK',
+            payload: {
+              session_id: context.sessionId,
               action: 'click',
+              origin,
               target: refId || selector,
-              data: { selector, ref_id: refId },
-              reversible: false,
-              riskClass: decision.risk_class,
+              arguments: { selector, ref_id: refId },
+              page_revision: context.pageRevision,
             },
-          };
+          });
+          decision = auth.decision;
+          actionHash = auth.actionHash;
+
+          if (!decision || !decision.allowed) {
+            return {
+              success: false,
+              error: decision?.reason || 'Bridge unreachable',
+              summary: `Click blocked: ${decision?.reason || 'bridge unreachable'}`,
+              navigationOccurred: false,
+              requiresConfirmation: decision?.requires_confirmation,
+            };
+          }
+
+          if (decision.requires_confirmation && !context.preAuthorized) {
+            return {
+              success: false,
+              error: 'Requires confirmation',
+              summary: 'Click requires confirmation',
+              navigationOccurred: false,
+              requiresConfirmation: true,
+              confirmationData: {
+                origin,
+                action: 'click',
+                target: refId || selector,
+                data: { selector, ref_id: refId },
+                reversible: false,
+                riskClass: decision.risk_class,
+              },
+            };
+          }
         }
 
         // Resolve the element's clickable center via the content script (read-only),
         // honoring the optional xpath/text disambiguation params (MOMO-077) and ref_id,
         // then dispatch a trusted CDP mouse click at those coordinates instead of a
         // synthetic el.click() (MOMO-019/080).
-        const probe = await chrome.scripting.executeScript({
-          target: { tabId: context.tabId, allFrames: false },
-          func: (sel: string, xp: string | undefined, hint: string | undefined, rId: string | undefined) => {
-            // Try ref_id first for stable targeting
-            let el: HTMLElement | null = null;
-            if (rId) {
-              // @ts-ignore - perception module injected globally
-              el = window.__perceptionFindByRefId?.(rId) || null;
-              if (el && el.checkVisibility()) {
-                const rect = el.getBoundingClientRect();
-                return {
-                  success: true,
-                  x: rect.x + rect.width / 2,
-                  y: rect.y + rect.height / 2,
-                  text: el.textContent?.slice(0, 100) || '',
-                  tag: el.tagName.toLowerCase(),
-                  bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-                  destructive: false,
-                  label: (el.textContent || '').slice(0, 50),
-                };
-              }
-            }
+        let probe;
+        try {
+          probe = await chrome.scripting.executeScript({
+            target: { tabId: context.tabId, allFrames: false },
+            func: (sel: string, xp: string | undefined, hint: string | undefined, rId: string | undefined) => {
+              // Detect destructive/sensitive click targets (submit/delete/payment
+              // controls) so an irreversible write can be surfaced for human
+              // confirmation (MOMO-020). Defined once up top and shared by both
+              // the ref_id fast-path and the selector fallback.
+              const DESTRUCTIVE_KEYWORDS = [
+                'pay', 'buy', 'purchase', 'checkout', 'order', 'confirm', 'submit',
+                'delete', 'remove', 'cancel', 'logout', 'sign out', 'signout',
+                'deactivate', 'close account', 'unsubscribe', 'transfer', 'refund',
+              ];
+              const rawTextOf = (el: HTMLElement): string =>
+                (el.textContent || (el as HTMLInputElement).value || el.getAttribute('aria-label') || el.getAttribute('value') || '').toLowerCase();
+              const isFormSubmitControlOf = (el: HTMLElement): boolean => {
+                const tag = el.tagName.toLowerCase();
+                const inputType = (el as HTMLInputElement).type || '';
+                const buttonType = (el as HTMLButtonElement).type || 'submit';
+                return (tag === 'input' && (inputType === 'submit' || inputType === 'image')) ||
+                  (tag === 'button' && buttonType === 'submit' && el.closest('form') !== null);
+              };
+              const destructiveOf = (el: HTMLElement): boolean =>
+                isFormSubmitControlOf(el) || DESTRUCTIVE_KEYWORDS.some(k => rawTextOf(el).includes(k));
 
-            // Fall back to XPath/selector
-            let candidates: Element[] = [];
-            if (xp) {
-              try {
-                const snapshot = document.evaluate(xp, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-                for (let i = 0; i < snapshot.snapshotLength; i++) {
-                  const node = snapshot.snapshotItem(i);
-                  if (node) candidates.push(node as Element);
+              // Try ref_id first for stable targeting
+              let el: HTMLElement | null = null;
+              if (rId) {
+                // @ts-ignore - perception module injected globally
+                el = window.__perceptionFindByRefId?.(rId) || null;
+                if (el && el.checkVisibility()) {
+                  const rect = el.getBoundingClientRect();
+                  return {
+                    success: true,
+                    x: rect.x + rect.width / 2,
+                    y: rect.y + rect.height / 2,
+                    text: el.textContent?.slice(0, 100) || '',
+                    tag: el.tagName.toLowerCase(),
+                    bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+                    destructive: destructiveOf(el),
+                    label: (el.textContent || '').slice(0, 50),
+                  };
                 }
-              } catch {
-                return { success: false, error: 'Invalid XPath' };
               }
-            } else {
-              try {
-                candidates = Array.from(document.querySelectorAll(sel));
-              } catch {
-                return { success: false, error: 'Invalid selector' };
+
+              // Fall back to XPath/selector
+              let candidates: Element[] = [];
+              if (xp) {
+                try {
+                  const snapshot = document.evaluate(xp, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+                  for (let i = 0; i < snapshot.snapshotLength; i++) {
+                    const node = snapshot.snapshotItem(i);
+                    if (node) candidates.push(node as Element);
+                  }
+                } catch {
+                  return { success: false, error: 'Invalid XPath' };
+                }
+              } else {
+                try {
+                  candidates = Array.from(document.querySelectorAll(sel));
+                } catch {
+                  return { success: false, error: 'Invalid selector' };
+                }
               }
-            }
 
-            // Disambiguate among matches by visible text when a hint is supplied.
-            el = (hint
-              ? candidates.find(c => (c.textContent || '').toLowerCase().includes(hint.toLowerCase()))
-              : candidates[0]) as HTMLElement | null;
+              // Disambiguate among matches by visible text when a hint is supplied.
+              el = (hint
+                ? candidates.find(c => (c.textContent || '').toLowerCase().includes(hint.toLowerCase()))
+                : candidates[0]) as HTMLElement | null;
 
-            if (!el) return { success: false, error: 'Element not found' };
-            if (!el.checkVisibility()) return { success: false, error: 'Element not visible' };
+              if (!el) return { success: false, error: 'Element not found' };
+              if (!el.checkVisibility()) return { success: false, error: 'Element not visible' };
 
-            const rect = el.getBoundingClientRect();
+              const rect = el.getBoundingClientRect();
+              const tag = el.tagName.toLowerCase();
+              const rawText = rawTextOf(el);
+              const destructive = destructiveOf(el);
 
-            // Detect destructive/sensitive click targets (submit/delete/payment
-            // controls) so an irreversible write can be surfaced for human
-            // confirmation (MOMO-020).
-            const DESTRUCTIVE_KEYWORDS = [
-              'pay', 'buy', 'purchase', 'checkout', 'order', 'confirm', 'submit',
-              'delete', 'remove', 'cancel', 'logout', 'sign out', 'signout',
-              'deactivate', 'close account', 'unsubscribe', 'transfer', 'refund',
-            ];
-            const tag = el.tagName.toLowerCase();
-            const inputType = (el as HTMLInputElement).type || '';
-            const buttonType = (el as HTMLButtonElement).type || 'submit';
-            const rawText = (el.textContent || (el as HTMLInputElement).value || el.getAttribute('aria-label') || el.getAttribute('value') || '').toLowerCase();
-            const isFormSubmitControl =
-              (tag === 'input' && (inputType === 'submit' || inputType === 'image')) ||
-              (tag === 'button' && buttonType === 'submit' && el.closest('form') !== null);
-            const destructive = isFormSubmitControl || DESTRUCTIVE_KEYWORDS.some(k => rawText.includes(k));
-
-            return {
-              success: true,
-              x: rect.x + rect.width / 2,
-              y: rect.y + rect.height / 2,
-              text: el.textContent?.slice(0, 100) || '',
-              tag,
-              bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-              destructive,
-              label: rawText.slice(0, 50),
-            };
-          },
-          args: [selector, xpath, textHint],
-        });
+              return {
+                success: true,
+                x: rect.x + rect.width / 2,
+                y: rect.y + rect.height / 2,
+                text: el.textContent?.slice(0, 100) || '',
+                tag,
+                bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+                destructive,
+                label: rawText.slice(0, 50),
+              };
+            },
+            args: [selector, xpath, textHint, refId],
+          });
+        } catch (e) {
+          await reportActionResult(context.sessionId, actionHash, false, String(e));
+          return { success: false, error: String(e), summary: 'Click failed', navigationOccurred: false };
+        }
 
         const res = probe[0]?.result;
         if (!res || !res.success) {

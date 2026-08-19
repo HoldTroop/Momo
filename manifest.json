@@ -36,8 +36,7 @@
         "dist/content/ax-extractor.js",
         "dist/content/dom-observer.js",
         "dist/content/human-input.js",
-        "dist/content/perception.js",
-        "dist/lib/automation-hygiene.js"
+        "dist/content/perception.js"
       ],
       "world": "ISOLATED",
       "run_at": "document_idle",
