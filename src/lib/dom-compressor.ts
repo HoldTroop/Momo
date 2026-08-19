@@ -36,6 +36,7 @@ export class DomCompressor {
   private actionabilityCache: Map<string, number> = new Map();
 
   compress(axTree: AxTree | null, url: string, title: string): CompressedDom {
+    this.actionabilityCache.clear();
     if (!axTree || !axTree.nodes.length) {
       return this.emptyDom(url, title);
     }
@@ -45,12 +46,19 @@ export class DomCompressor {
       nodesById.set(node.backendDOMNodeId, node);
     }
 
+    // O(1) parent lookups built once per compress(); last-writer-wins per
+    // child id is a known residual for cross-frame id collisions.
+    const parentMap = new Map<number, number>();
+    for (const n of axTree.nodes) {
+      for (const childId of n.childIds) parentMap.set(childId, n.backendDOMNodeId);
+    }
+
     const actionableElements: ActionableElement[] = [];
     const visited = new Set<number>();
 
     for (const node of axTree.nodes) {
       if (this.isActionable(node) && this.isVisible(node)) {
-        const selector = this.generateSelector(node, nodesById);
+        const selector = this.generateSelector(node, nodesById, parentMap);
         if (selector) {
           const score = this.calculateActionability(node);
           actionableElements.push({
@@ -125,14 +133,20 @@ export class DomCompressor {
     return roleToTagMap[role] || 'div';
   }
 
-  private generateSelector(node: AxNode, nodesById: Map<number, AxNode>): string | null {
+  private generateSelector(node: AxNode, nodesById: Map<number, AxNode>, parentMap: Map<number, number>): string | null {
     // Try to build a stable CSS selector
     if (node.attributes.id) {
-      return `#${node.attributes.id}`;
+      const sel = `#${CSS.escape(node.attributes.id)}`;
+      if (typeof document === 'undefined' || document.querySelectorAll(sel).length <= 1) {
+        return sel;
+      }
     }
 
     if (node.attributes['data-testid']) {
-      return `[data-testid="${node.attributes['data-testid']}"]`;
+      const sel = `[data-testid="${CSS.escape(node.attributes['data-testid'])}"]`;
+      if (typeof document === 'undefined' || document.querySelectorAll(sel).length <= 1) {
+        return sel;
+      }
     }
 
     // Build path from ancestors
@@ -141,9 +155,9 @@ export class DomCompressor {
     let depth = 0;
 
     while (current && depth < 5) {
-      let segment = current.role;
+      let segment = this.roleToTag(current.role);
       if (current.attributes.id) {
-        segment = `#${current.attributes.id}`;
+        segment = `#${CSS.escape(current.attributes.id)}`;
         path.unshift(segment);
         break;
       }
@@ -151,26 +165,21 @@ export class DomCompressor {
       if (current.attributes.class) {
         const classes = current.attributes.class.split(' ').filter(c => c.length > 1).slice(0, 2);
         if (classes.length > 0) {
-          segment += `.${classes.join('.')}`;
+          segment += `.${classes.map(c => CSS.escape(c)).join('.')}`;
         }
       }
 
       path.unshift(segment);
-      current = this.getParent(current, nodesById);
+      current = this.getParent(current, nodesById, parentMap);
       depth++;
     }
 
     return path.join(' > ') || null;
   }
 
-  private getParent(node: AxNode, nodesById: Map<number, AxNode>): AxNode | undefined {
-    // Find parent by checking which node has this node in childIds
-    for (const [, potentialParent] of nodesById) {
-      if (potentialParent.childIds.includes(node.backendDOMNodeId)) {
-        return potentialParent;
-      }
-    }
-    return undefined;
+  private getParent(node: AxNode, nodesById: Map<number, AxNode>, parentMap: Map<number, number>): AxNode | undefined {
+    const parentId = parentMap.get(node.backendDOMNodeId);
+    return parentId === undefined ? undefined : nodesById.get(parentId);
   }
 
   private calculateActionability(node: AxNode): number {
@@ -207,7 +216,7 @@ export class DomCompressor {
 
     // Visibility and position
     if (node.rect) {
-      const viewportHeight = window.innerHeight || 800;
+      const viewportHeight = (typeof window !== 'undefined' && typeof window.innerHeight === 'number') ? window.innerHeight : 800;
       if (node.rect.top < viewportHeight) score += 0.1;
       if (node.rect.width > 20 && node.rect.height > 20) score += 0.05;
     }

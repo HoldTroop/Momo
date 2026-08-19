@@ -141,6 +141,7 @@ describe('getInteractiveElements', () => {
       body: {},
       activeElement: input, // focused → input.state should include 'focused'
       createTreeWalker: () => walker,
+      querySelectorAll: () => [], // H35 cleanup finds no stale refs on first run
     });
 
     const result = mod.getInteractiveElements();
@@ -166,5 +167,84 @@ describe('getInteractiveElements', () => {
       ['data-momo-ref', 'el_1'],
       ['data-momo-ref', 'el_2'],
     ]);
+  });
+
+  it('strips stale data-momo-ref tags from prior enumerations and re-tags correctly (H35)', () => {
+    // Simulates a re-rendered page: `stale` kept its data-momo-ref="el_9"
+    // from a previous enumeration but is no longer enumerated.
+    const stale = makeEl('button', { textContent: 'Old' });
+    const staleAttrs: Record<string, string> = { 'data-momo-ref': 'el_9', 'data-momo-ref-id': 'momo-9' };
+    const staleRemoved: string[] = [];
+    (stale as unknown as { setAttribute: (n: string, v: string) => void }).setAttribute = (n, v) => { staleAttrs[n] = v; };
+    (stale as unknown as { removeAttribute: (n: string) => void }).removeAttribute = (n) => { staleRemoved.push(n); delete staleAttrs[n]; };
+
+    const fresh = makeEl('button', { textContent: 'New' });
+    const freshAttrs: Record<string, string> = {};
+    const setAttr: Array<[string, string]> = [];
+    (fresh as unknown as { setAttribute: (n: string, v: string) => void }).setAttribute = (n, v) => { freshAttrs[n] = v; setAttr.push([n, v]); };
+    (fresh as unknown as { removeAttribute: (n: string) => void }).removeAttribute = (n) => { delete freshAttrs[n]; };
+
+    const nodes = [fresh];
+    let idx = 0;
+    const walker = {
+      currentNode: null as unknown,
+      nextNode: () => {
+        const node = idx < nodes.length ? nodes[idx] : null;
+        walker.currentNode = node;
+        idx += 1;
+        return node;
+      },
+    };
+
+    const querySelector = (sel: string): unknown => {
+      const m = sel.match(/^\[data-momo-ref="([^"]+)"\]$/);
+      if (!m) return null;
+      const ref = m[1];
+      if (freshAttrs['data-momo-ref'] === ref) return fresh;
+      if (staleAttrs['data-momo-ref'] === ref) return stale;
+      return null;
+    };
+
+    vi.stubGlobal('NodeFilter', { SHOW_ELEMENT: 1 });
+    vi.stubGlobal('location', { href: 'https://example.com/page' });
+    vi.stubGlobal('document', {
+      body: {},
+      activeElement: {},
+      createTreeWalker: () => walker,
+      querySelectorAll: () => [stale],
+      querySelector,
+    });
+
+    // el_1 was never issued → stale_reference.
+    expect(mod.resolveByRefStrict('el_1').status).toBe('stale_reference');
+    // Pre-strip, the leftover el_9 tag still (wrongly) resolves. This is the
+    // bug the strip fixes.
+    expect(mod.resolveByRefStrict('el_9').status).toBe('ok');
+
+    const first = mod.getInteractiveElements();
+    expect(first.elements).toHaveLength(1);
+    expect(first.elements[0]!.ref).toBe('el_1');
+    // Both marker attributes were stripped from the leftover element.
+    expect(staleRemoved).toContain('data-momo-ref');
+    expect(staleRemoved).toContain('data-momo-ref-id');
+    expect(staleAttrs['data-momo-ref']).toBeUndefined();
+    expect(staleAttrs['data-momo-ref-id']).toBeUndefined();
+    // The fresh element got the counter's first ref.
+    expect(freshAttrs['data-momo-ref']).toBe('el_1');
+
+    // Second call: counter resets, element re-tagged, and its ref resolves.
+    idx = 0;
+    const second = mod.getInteractiveElements();
+    expect(second.elements).toHaveLength(1);
+    expect(second.elements[0]!.ref).toBe('el_1');
+    expect(setAttr).toEqual([
+      ['data-momo-ref', 'el_1'],
+      ['data-momo-ref', 'el_1'],
+    ]);
+    expect(mod.resolveByRefStrict('el_1').status).toBe('ok');
+
+    // After stripping, the old el_9 ref no longer resolves to the stale
+    // element (would have been the WRONG element before the fix).
+    expect(mod.resolveByRefStrict('el_9').status).toBe('stale_reference');
   });
 });

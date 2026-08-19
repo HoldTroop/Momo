@@ -51,7 +51,7 @@ export function extractPerception(includeMarkdown: boolean = true): PerceptionRe
         const refId = `momo-${++counter}`;
         el.dataset.momoRefId = refId;
         const selector = generateSelector(el);
-        if (selector) {
+        if (selector && !refIdMap[selector]) {
           refIdMap[selector] = refId;
         }
       }
@@ -60,6 +60,10 @@ export function extractPerception(includeMarkdown: boolean = true): PerceptionRe
     // 2. Clone the (now annotated) document for the reading pass. Readability
     //    mutates its input, so it runs on a clone rather than the live page.
     const clone = document.cloneNode(true) as Document;
+    clone.querySelectorAll('[data-momo-ref], [data-momo-ref-id]').forEach(el => {
+      el.removeAttribute('data-momo-ref');
+      el.removeAttribute('data-momo-ref-id');
+    });
 
     // 3. Readability → Turndown on the clone.
     const reader = new Readability(clone);
@@ -212,6 +216,12 @@ function computeState(el: HTMLElement): string[] {
  * label, state, and bounds so an external agent can decide what to target.
  */
 export function getInteractiveElements(): InteractiveElementsResult {
+  // H35: strip leftover ref attributes from prior enumerations. They survive
+  // re-renders and would otherwise make resolveByRefStrict / [data-momo-ref]
+  // lookups resolve to the WRONG element.
+  document.querySelectorAll('[data-momo-ref]').forEach(el => el.removeAttribute('data-momo-ref'));
+  document.querySelectorAll('[data-momo-ref-id]').forEach(el => el.removeAttribute('data-momo-ref-id'));
+
   const elements: InteractiveElement[] = [];
   let counter = 0;
 

@@ -8,12 +8,12 @@
 export function generateSelector(el: Element): string {
   // Try ID first
   if (el.id) {
-    return `#${el.id}`;
+    return ensureUnique(`#${CSS.escape(el.id)}`, el);
   }
 
   // Try data-testid
   if (el.hasAttribute('data-testid')) {
-    return `[data-testid="${el.getAttribute('data-testid')}"]`;
+    return ensureUnique(`[data-testid="${CSS.escape(el.getAttribute('data-testid')!)}"]`, el);
   }
 
   // Build path from ancestors
@@ -25,7 +25,7 @@ export function generateSelector(el: Element): string {
     let segment = current.tagName.toLowerCase();
 
     if (current.id) {
-      segment = `#${current.id}`;
+      segment = `#${CSS.escape(current.id)}`;
       path.unshift(segment);
       break;
     }
@@ -36,7 +36,7 @@ export function generateSelector(el: Element): string {
         .filter(c => c.length > 1)
         .slice(0, 2);
       if (classes.length > 0) {
-        segment += `.${classes.join('.')}`;
+        segment += `.${classes.map(c => CSS.escape(c)).join('.')}`;
       }
     }
 
@@ -45,7 +45,21 @@ export function generateSelector(el: Element): string {
     depth++;
   }
 
-  return path.join(' > ') || '';
+  return ensureUnique(path.join(' > ') || '', el);
+}
+
+function ensureUnique(sel: string, el: Element): string {
+  if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return sel;
+  if (!sel || document.querySelectorAll(sel).length <= 1) return sel;
+  return `${sel}:nth-of-type(${nthOfTypeIndex(el)})`;
+}
+
+function nthOfTypeIndex(el: Element): number {
+  let i = 1;
+  for (let sib = el.parentElement?.firstElementChild; sib && sib !== el; sib = sib.nextElementSibling) {
+    if (sib.tagName === el.tagName) i++;
+  }
+  return i;
 }
 
 /**
@@ -70,11 +84,19 @@ export function isActionable(el: HTMLElement): boolean {
 
 export function getImplicitRole(el: HTMLElement): string {
   const tag = el.tagName.toLowerCase();
-  const type = (el as HTMLInputElement).type;
+  if (tag === 'a') {
+    return el.hasAttribute('href') ? 'link' : 'generic';
+  }
+  if (tag === 'input') {
+    const type = (el as HTMLInputElement).type;
+    if (type === 'button' || type === 'submit' || type === 'reset') return 'button';
+    if (type === 'hidden') return 'generic';
+    if (type === 'checkbox') return 'checkbox';
+    if (type === 'radio') return 'radio';
+    return 'textbox';
+  }
   const roles: Record<string, string> = {
-    'a': 'link',
     'button': 'button',
-    'input': type === 'checkbox' ? 'checkbox' : type === 'radio' ? 'radio' : 'textbox',
     'select': 'combobox',
     'textarea': 'textbox',
     'option': 'option',

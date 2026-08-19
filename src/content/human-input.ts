@@ -28,31 +28,74 @@ class HumanInputSimulator {
   }
 
   private handleMessage(message: any, sender: chrome.runtime.MessageSender, sendResponse: (response: any) => void) {
-    switch (message.type) {
-      case 'SIMULATE_CLICK':
-        this.simulateClick(message.payload.x, message.payload.y, message.payload.profile)
-          .then(() => sendResponse({ success: true }))
-          .catch(err => sendResponse({ success: false, error: err.message }));
-        break;
-      case 'SIMULATE_TYPE':
-        this.simulateType(message.payload.text, message.payload.profile)
-          .then(() => sendResponse({ success: true }))
-          .catch(err => sendResponse({ success: false, error: err.message }));
-        break;
-      case 'SIMULATE_SCROLL':
-        this.simulateScroll(message.payload.x, message.payload.y, message.payload.deltaX, message.payload.deltaY, message.payload.profile)
-          .then(() => sendResponse({ success: true }))
-          .catch(err => sendResponse({ success: false, error: err.message }));
-        break;
-      case 'SIMULATE_MOUSE_MOVE':
-        this.simulateMouseMove(message.payload.fromX, message.payload.fromY, message.payload.toX, message.payload.toY, message.payload.profile)
-          .then(() => sendResponse({ success: true }))
-          .catch(err => sendResponse({ success: false, error: err.message }));
-        break;
-      case 'SET_PROFILE':
-        this.profile = { ...this.profile, ...message.payload };
-        sendResponse({ success: true });
-        break;
+    const p = message.payload;
+    if (!p || typeof p !== 'object') {
+      sendResponse({ success: false, error: 'Missing payload' });
+      return;
+    }
+
+    const sendError = (e: unknown) => sendResponse({ success: false, error: String(e) });
+
+    try {
+      switch (message.type) {
+        case 'SIMULATE_CLICK': {
+          const x = Number(p.x);
+          const y = Number(p.y);
+          if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            sendResponse({ success: false, error: 'Invalid payload: x/y must be finite numbers' });
+            return;
+          }
+          this.simulateClick(x, y, p.profile)
+            .then(() => sendResponse({ success: true }))
+            .catch(sendError);
+          break;
+        }
+        case 'SIMULATE_TYPE':
+          if (typeof p.text !== 'string') {
+            sendResponse({ success: false, error: 'Invalid payload: text must be a string' });
+            return;
+          }
+          this.simulateType(p.text, p.profile)
+            .then(() => sendResponse({ success: true }))
+            .catch(sendError);
+          break;
+        case 'SIMULATE_SCROLL': {
+          const x = Number(p.x);
+          const y = Number(p.y);
+          const deltaX = Number(p.deltaX);
+          const deltaY = Number(p.deltaY);
+          if (![x, y, deltaX, deltaY].every(Number.isFinite)) {
+            sendResponse({ success: false, error: 'Invalid payload: x/y/deltaX/deltaY must be finite numbers' });
+            return;
+          }
+          this.simulateScroll(x, y, deltaX, deltaY, p.profile)
+            .then(() => sendResponse({ success: true }))
+            .catch(sendError);
+          break;
+        }
+        case 'SIMULATE_MOUSE_MOVE': {
+          const fromX = Number(p.fromX);
+          const fromY = Number(p.fromY);
+          const toX = Number(p.toX);
+          const toY = Number(p.toY);
+          if (![fromX, fromY, toX, toY].every(Number.isFinite)) {
+            sendResponse({ success: false, error: 'Invalid payload: fromX/fromY/toX/toY must be finite numbers' });
+            return;
+          }
+          this.simulateMouseMove(fromX, fromY, toX, toY, p.profile)
+            .then(() => sendResponse({ success: true }))
+            .catch(sendError);
+          break;
+        }
+        case 'SET_PROFILE':
+          this.profile = { ...this.profile, ...p };
+          sendResponse({ success: true });
+          break;
+        default:
+          sendResponse({ success: false, error: `Unknown message type: ${String(message.type)}` });
+      }
+    } catch (e) {
+      sendResponse({ success: false, error: String(e) });
     }
   }
 
@@ -84,13 +127,11 @@ class HumanInputSimulator {
 
     try {
       for (const ch of text) {
-        // Key down
-        this.dispatchKeyEvent('keydown', ch);
-        // Small delay for usability
+        const { key, code } = this.keyDescriptor(ch);
+        this.dispatchKeyEventWithCode('keydown', key, code);
         await this.sleep(10);
-        // Key up
-        this.dispatchKeyEvent('keyup', ch);
-        // Small inter-key delay
+        this.dispatchKeyEventWithCode('keyup', key, code);
+        this.insertChar(ch);
         await this.sleep(10);
       }
     } finally {
@@ -153,7 +194,48 @@ class HumanInputSimulator {
     });
 
     const target = document.elementFromPoint(x, y) || document.body;
+    // M4: the child frame's own content script dispatches its events;
+    // dispatching here too would double-fire.
+    if (target.tagName === 'IFRAME' || target.tagName === 'FRAME') return;
     target.dispatchEvent(event);
+  }
+
+  private keyDescriptor(ch: string): { key: string; code: string } {
+    if (ch === ' ') return { key: ' ', code: 'Space' };
+    if (ch === 'Enter') return { key: 'Enter', code: 'Enter' };
+    if (ch === 'Backspace') return { key: 'Backspace', code: 'Backspace' };
+    if (ch === 'Tab') return { key: 'Tab', code: 'Tab' };
+    if (/^[a-zA-Z]$/.test(ch)) return { key: ch, code: `Key${ch.toUpperCase()}` };
+    if (/^[0-9]$/.test(ch)) return { key: ch, code: `Digit${ch}` };
+    if (/^[A-Z]$/.test(ch)) return { key: ch, code: `Key${ch}` };
+    return { key: ch, code: '' };
+  }
+
+  private insertChar(ch: string): void {
+    const active = document.activeElement as HTMLElement | null;
+    if (!active) return;
+    const tag = active.tagName?.toLowerCase() ?? '';
+    const isEditable = tag === 'input' || tag === 'textarea' || (active as HTMLElement).isContentEditable === true;
+    if (!isEditable) return;
+    const proto = tag === 'textarea' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    if (setter) {
+      setter.call(active, (active as HTMLInputElement).value + ch);
+    } else {
+      (active as HTMLInputElement).value += ch;
+    }
+    active.dispatchEvent(new InputEvent('input', { data: ch, inputType: 'insertText', bubbles: true, composed: true }));
+  }
+
+  private dispatchKeyEventWithCode(type: string, key: string, code: string) {
+    const event = new KeyboardEvent(type, {
+      key,
+      code,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    (document.activeElement || document.body).dispatchEvent(event);
   }
 
   private dispatchKeyEvent(type: string, key: string) {
@@ -165,15 +247,7 @@ class HumanInputSimulator {
     };
 
     const mapping = keyMap[key] || { key: key.toUpperCase(), code: `Key${key.toUpperCase()}` };
-
-    const event = new KeyboardEvent(type, {
-      key: mapping.key,
-      code: mapping.code,
-      bubbles: true,
-      cancelable: true,
-    });
-
-    (document.activeElement || document.body).dispatchEvent(event);
+    this.dispatchKeyEventWithCode(type, mapping.key, mapping.code);
   }
 
   private sleep(ms: number): Promise<void> {

@@ -56,6 +56,14 @@ function axImplicitRole(el: Element): string {
   return roles[tag] || 'generic';
 }
 
+function axName(el: Element): string {
+  const labelledby = el.getAttribute('aria-labelledby');
+  if (labelledby) {
+    return labelledby.split(/\s+/).map(id => document.getElementById(id)?.textContent?.trim()).join(' ').slice(0, 100);
+  }
+  return el.getAttribute('aria-label') || (el.textContent || '').trim().slice(0, 100);
+}
+
 function axStates(el: Element): string[] {
   const states: string[] = [];
   const input = el as HTMLInputElement;
@@ -82,9 +90,7 @@ function axAttributes(el: Element): Record<string, string> {
 class AxTreeExtractor {
   private cdpSessionId: string | null = null;
   private observer: MutationObserver | null = null;
-  private lastSnapshot: AxTree | null = null;
-  private snapshotCallbacks: Map<string, (tree: AxTree) => void> = new Map();
-  private requestId = 0;
+  private debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor() {
     this.init();
@@ -102,6 +108,7 @@ class AxTreeExtractor {
   }
 
   private async attachToCdp() {
+    if (window !== window.top) return;
     try {
       const response = await chrome.runtime.sendMessage({ type: 'CDP_ATTACH_REQUEST' });
       if (response?.sessionId) {
@@ -169,7 +176,7 @@ class AxTreeExtractor {
 
       nodes.push({
         role: el.getAttribute('role') || axImplicitRole(el),
-        name: el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || (el.textContent || '').trim().slice(0, 100),
+        name: axName(el),
         value: axIsSensitive(el) ? '' : ((el as HTMLInputElement).value || ''),
         description: el.getAttribute('aria-description') || '',
         states: axStates(el),
@@ -187,22 +194,40 @@ class AxTreeExtractor {
   }
 
   private convertCdpAxTree(cdpTree: any): AxTree {
-    // Convert CDP accessibility tree format to our internal format
+    // Convert CDP accessibility tree format to our internal format. A CDP AXNode
+    // is { nodeId, role: {value}, name: {value}, value: {value}, description:
+    // {value}, properties: AXProperty[], childIds: AXNodeId[], backendDOMNodeId };
+    // there are no states/attributes/rect fields — all are derived here.
+    const axToBackend = new Map<number, number>();
+    for (const node of (cdpTree.nodes || [])) {
+      axToBackend.set(node.nodeId, node.backendDOMNodeId);
+    }
+
     return {
-      nodes: (cdpTree.nodes || []).map((node: any) => ({
-        role: node.role?.value || 'generic',
-        name: node.name?.value || '',
-        value: node.value?.value || '',
-        description: node.description?.value || '',
-        states: (node.states || []).map((s: any) => s.value),
-        attributes: node.attributes || {},
-        childIds: node.childIds || [],
-        backendDOMNodeId: node.backendDOMNodeId,
-        rect: node.rect ? {
-          x: node.rect.x, y: node.rect.y, width: node.rect.width, height: node.rect.height,
-          top: node.rect.y, right: node.rect.x + node.rect.width, bottom: node.rect.y + node.rect.height, left: node.rect.x
-        } : undefined,
-      })),
+      nodes: (cdpTree.nodes || []).map((node: any) => {
+        const states: string[] = [];
+        const attributes: Record<string, string> = {};
+        for (const p of (node.properties || [])) {
+          if (p.value && p.value.value !== false && p.value.value !== undefined && p.value.value !== null) {
+            states.push(p.name.toLowerCase());
+            if (p.name === 'hidden') states.push('invisible');
+          }
+          if (p.value?.type === 'string') {
+            attributes[p.name] = p.value.value;
+          }
+        }
+        return {
+          role: node.role?.value || 'generic',
+          name: node.name?.value || '',
+          value: node.value?.value || '',
+          description: node.description?.value || '',
+          states,
+          attributes,
+          childIds: (node.childIds || []).map((id: number) => axToBackend.get(id)).filter((id: number | undefined): id is number => id !== undefined),
+          backendDOMNodeId: node.backendDOMNodeId,
+          rect: undefined,
+        };
+      }),
     };
   }
 
@@ -221,14 +246,11 @@ class AxTreeExtractor {
   startObserving() {
     if (this.observer) return;
 
-    this.observer = new MutationObserver(mutations => {
+    this.observer = new MutationObserver(() => {
       // Debounce snapshot updates
-      clearTimeout((this as any).debounceTimer);
-      (this as any).debounceTimer = setTimeout(() => {
-        this.getAxTree().then(tree => {
-          this.lastSnapshot = tree;
-          if (tree) this.notifyCallbacks(tree);
-        });
+      if (this.debounceTimer !== undefined) clearTimeout(this.debounceTimer);
+      this.debounceTimer = setTimeout(() => {
+        this.getAxTree();
       }, 300);
     });
 
@@ -236,7 +258,7 @@ class AxTreeExtractor {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['aria-*', 'role', 'disabled', 'hidden', 'class', 'id'],
+      attributeFilter: ['role', 'disabled', 'hidden', 'class', 'id', 'aria-label', 'aria-expanded', 'aria-checked', 'aria-disabled', 'aria-hidden', 'aria-invalid', 'aria-valuetext', 'value', 'checked', 'selected', 'style', 'href', 'title'],
     });
   }
 
@@ -247,15 +269,6 @@ class AxTreeExtractor {
     }
   }
 
-  private notifyCallbacks(tree: AxTree) {
-    for (const [, callback] of this.snapshotCallbacks) {
-      try {
-        callback(tree);
-      } catch (e) {
-        console.warn('[AX Extractor] Callback error:', e);
-      }
-    }
-  }
 }
 
 // Initialize extractor

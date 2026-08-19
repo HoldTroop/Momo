@@ -8,6 +8,7 @@ interface DomChange {
   attributeName?: string;
   oldValue?: string;
   newValue?: string;
+  data?: string;
   timestamp: number;
 }
 

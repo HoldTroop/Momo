@@ -6,6 +6,17 @@ import { DomCompressor } from './dom-compressor.js';
 // silently dropped. These tests pin the corrected contract: a missing rect is
 // "geometry unknown" (kept), while explicit hidden signals still filter.
 
+// Node's runtime (vitest default env) has no CSS namespace; provide a minimal
+// CSS.escape so the selector generation under test can run here. Browsers
+// (content scripts and service worker) ship the real CSS.escape.
+if (typeof (globalThis as { CSS?: unknown }).CSS === 'undefined') {
+  (globalThis as { CSS: { escape: (value: string) => string } }).CSS = {
+    escape(value: string): string {
+      return value.replace(/[^a-zA-Z0-9_\u00A0-\uFFFF-]/g, (ch) => '\\' + ch);
+    },
+  };
+}
+
 interface AxNode {
   role: string;
   name: string;
@@ -67,5 +78,41 @@ describe('DomCompressor.isVisible (missing-rect fix)', () => {
       'T',
     );
     expect(dom.actions).toHaveLength(0);
+  });
+});
+
+describe('DomCompressor selector generation (role-to-tag + CSS escaping)', () => {
+  it('uses role-to-tag mapping instead of emitting raw roles in the selector path', () => {
+    const parent = node({
+      role: 'generic',
+      name: 'Root',
+      backendDOMNodeId: 1,
+      childIds: [2],
+      attributes: {},
+    });
+    const textbox = node({
+      role: 'textbox',
+      name: 'Search',
+      backendDOMNodeId: 2,
+      childIds: [],
+      attributes: {},
+    });
+
+    const dom = new DomCompressor().compress({ nodes: [parent, textbox] }, 'http://x.test/', 'T');
+
+    expect(dom.actions).toHaveLength(1);
+    const selector = dom.actions[0]!.selector;
+    expect(selector).toContain('input');
+    expect(selector).not.toContain('textbox >');
+    expect(selector).not.toContain('generic');
+  });
+
+  it('CSS-escapes special characters in class names', () => {
+    const el = node({ attributes: { class: 'md:flex w-1/2' } });
+
+    const dom = new DomCompressor().compress({ nodes: [el] }, 'http://x.test/', 'T');
+
+    expect(dom.actions).toHaveLength(1);
+    expect(dom.actions[0]!.selector).toContain('.md\\:flex');
   });
 });

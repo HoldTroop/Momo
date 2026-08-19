@@ -940,7 +940,7 @@ export class AgentOrchestrator {
 
     if (!axTree) {
       try {
-        const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_AX_TREE' });
+        const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_AX_TREE' }, { frameId: 0 });
         axTree = response?.axTree ?? null;
       } catch {
         axTree = null;
