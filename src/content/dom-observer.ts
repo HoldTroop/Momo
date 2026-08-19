@@ -43,7 +43,10 @@ class DomObserver {
           const attrName = change.attributeName ?? '';
           change.oldValue = mutation.oldValue ? redactAttributeValue(attrName, mutation.oldValue) : undefined;
           const rawNewValue = (mutation.target as Element).getAttribute(mutation.attributeName || '');
-          change.newValue = rawNewValue != null ? redactAttributeValue(attrName, rawNewValue) : undefined;
+          change.newValue = rawNewValue != null ? redactAttributeValue(attrName, rawNewValue, { type: (mutation.target as HTMLElement).getAttribute?.('type') ?? undefined, name: (mutation.target as HTMLElement).getAttribute?.('name') ?? undefined, id: (mutation.target as HTMLElement).id ?? undefined }) : undefined;
+        } else if (mutation.type === 'characterData') {
+          change.target = this.getSelector(mutation.target.parentElement ?? mutation.target);
+          change.data = (mutation.target.textContent || '').slice(0, 200);
         }
 
         this.bufferChange(change);

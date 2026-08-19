@@ -14,26 +14,29 @@ const SENSITIVE_AUTOCOMPLETE_TOKENS = [
 
 /** `name`/`id` fragments that mark a field as sensitive. */
 const SENSITIVE_FIELD_PATTERN =
-  /(password|passwd|pwd|secret|token|api[_-]?key|authorization|credential|credit|card|cvv|cvc|ssn|social)/i;
+  /(password|passwd|pwd|pass|passcode|passphrase|pin|otp|secret|token|api[_-]?key|authorization|credential|credit|card|cvv|cvc|ssn|social|account|routing|iban|bic)/i;
 
 /** Standalone secret/PII value shapes, independent of field metadata. */
 const SECRET_VALUE_PATTERNS: RegExp[] = [
-  /\b(?:\d[ -]*?){13,16}\b/g,                        // credit-card numbers
+  /\b(?:\d[ -]*?){13,19}(?!\d)/g,                    // credit-card numbers
   /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, // emails
   /\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g, // US phone numbers
-  /\b\d{3}-\d{2}-\d{4}\b/g,                          // US SSN
-  /\bsk-[a-zA-Z0-9]{20,}\b/g,                        // OpenAI keys
+  /\b\d{3}-?\d{2}-?\d{4}\b/g,                        // US SSN
+  /\bsk-[A-Za-z0-9_-]{20,}\b/g,                      // OpenAI keys
+  /\bsk-proj_[A-Za-z0-9_-]{20,}\b/g,                 // OpenAI project keys
   /\bxox[baprs]-[a-zA-Z0-9-]{10,}\b/g,               // Slack tokens
   /\bgh[pousr]_[a-zA-Z0-9]{20,}\b/g,                 // GitHub personal-access tokens
   /\bgithub_pat_[a-zA-Z0-9_]{20,}\b/g,               // GitHub fine-grained PATs
-  /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,                  // AWS access-key IDs
+  /\b(?:AKIA|ASIA|AGPA|AIDA)[A-Z0-9]{16}\b/g,        // AWS access-key IDs
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, // JWTs
   /\bbearer\s+[A-Za-z0-9._~+/-]+=*\b/gi,             // bearer tokens
 ];
 
 /** `key: value` assignments where the key itself names a secret. */
-const KEY_VALUE_SECRET_PATTERN =
-  /\b(?:password|passwd|pwd|secret|token|api[_-]?key|authorization|credential)\s*[:=]\s*\S+/gi;
+const KEY_VALUE_SECRET_PATTERNS: RegExp[] = [
+  /"\s*(?:password|passwd|pwd|pass|passcode|secret|token|key|authorization|credential|client[_-]?secret|access[_-]?token|refresh[_-]?token|api[_-]?key)\s*"\s*:\s*("[^"]*"|'[^']*'|[^,}\s]+)/gi,
+  /\b(?:[a-z0-9]+[_-])?(?:password|passwd|pwd|pass|passcode|secret|token|key|authorization|credential)\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\n;]+)/gi,
+];
 
 export interface SensitiveFieldDescriptor {
   type?: string;
@@ -61,23 +64,46 @@ export function redactText(text: string): string {
   for (const pattern of SECRET_VALUE_PATTERNS) {
     result = result.replace(pattern, '[REDACTED]');
   }
-  return result.replace(KEY_VALUE_SECRET_PATTERN, '[REDACTED]');
+  for (const pattern of KEY_VALUE_SECRET_PATTERNS) {
+    result = result.replace(pattern, '[REDACTED]');
+  }
+  return result;
 }
 
 /**
- * Recursively redact strings inside plain objects and arrays (never mutating the
- * input). Non-plain objects (Map, Set, Date, class instances) and primitives are
- * passed through unchanged — they are handled by Dexie/SuperJSON separately.
+ * Recursively redact strings inside plain objects, arrays, Maps and Sets (never
+ * mutating the input). Date and other class instances are passed through
+ * unchanged — they are handled by Dexie/SuperJSON separately. Values stored
+ * under sensitive keys are dropped wholesale instead of being recursed into.
  */
 export function redactValue(value: unknown): unknown {
   if (typeof value === 'string') return redactText(value);
   if (Array.isArray(value)) return value.map(redactValue);
+  if (value instanceof Map) {
+    return new Map(
+      Array.from(value.entries()).map(([k, v]): [unknown, unknown] => [redactValue(k), redactValue(v)])
+    );
+  }
+  if (value instanceof Set) {
+    return new Set(Array.from(value).map(redactValue));
+  }
   if (value !== null && typeof value === 'object') {
     const proto = Object.getPrototypeOf(value);
     if (proto !== Object.prototype && proto !== null) return value;
     const result: Record<string, unknown> = {};
     for (const key of Object.keys(value as Record<string, unknown>)) {
-      result[key] = redactValue((value as Record<string, unknown>)[key]);
+      if (key === '__proto__') {
+        Object.defineProperty(result, key, {
+          value: redactValue((value as Record<string, unknown>)[key]),
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
+      } else if (SENSITIVE_FIELD_PATTERN.test(key)) {
+        result[key] = '[REDACTED]';
+      } else {
+        result[key] = redactValue((value as Record<string, unknown>)[key]);
+      }
     }
     return result;
   }
@@ -91,26 +117,33 @@ export function redactInputValue(field: SensitiveFieldDescriptor, value: string)
 }
 
 /** Attribute names whose values must never be captured by the DOM observer. */
-export function isSensitiveAttribute(name: string): boolean {
+export function isSensitiveAttribute(name: string, field?: SensitiveFieldDescriptor): boolean {
   const lower = (name || '').toLowerCase();
-  return lower.startsWith('data-') || lower === 'value';
+  if (lower.startsWith('data-')) return true;
+  if (lower === 'value') return field ? isSensitiveInput(field) : true;
+  return false;
 }
 
 /**
  * Redact a single attribute value observed by the DOM observer. String-splitting
- * only (no `window`/`URL`, since this module is imported from the SW/offscreen
- * context). `data-*` and `value` are dropped entirely; `href`/`src` drop
- * `data:`/`javascript:` payloads and otherwise strip query+fragment before the
- * usual secret scrubbing; everything else is passed through.
+ * only (no `window`/`URL`, since this module is imported from the SW
+ * context). `data-*` and sensitive `value` attributes are dropped entirely;
+ * URL-ish attributes drop `data:`/`javascript:`/`vbscript:` payloads and
+ * otherwise strip query+fragment before the usual secret scrubbing; everything
+ * else is passed through.
  */
-export function redactAttributeValue(name: string, value: string): string {
-  if (isSensitiveAttribute(name)) return '';
+export function redactAttributeValue(
+  name: string,
+  value: string,
+  field?: SensitiveFieldDescriptor
+): string {
+  if (isSensitiveAttribute(name, field)) return '';
   if (!value) return value;
 
   const lower = (name || '').toLowerCase();
-  if (lower === 'href' || lower === 'src') {
+  if (['href', 'src', 'action', 'formaction', 'poster', 'cite'].includes(lower)) {
     const trimmed = value.trim();
-    if (/^(?:data:|javascript:)/i.test(trimmed)) return '[REDACTED]';
+    if (/^(?:data:|javascript:|vbscript:)/i.test(trimmed)) return '[REDACTED]';
     const base = trimmed.split(/[?#]/)[0] ?? '';
     return redactText(base);
   }

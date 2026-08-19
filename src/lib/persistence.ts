@@ -1,5 +1,6 @@
 import { AgentState, Checkpoint, WalEntry, WalOperation, TaskQueueEntry, TaskStatus } from '../sw/orchestrator.js';
 import SuperJSON from 'superjson';
+import type { SuperJSONResult } from 'superjson';
 import { redactText, redactValue } from './redaction.js';
 
 declare global {
@@ -21,7 +22,7 @@ interface WalRecord {
   sessionId: string;
   timestamp: number;
   operation: WalOperation;
-  data: unknown;
+  data: SuperJSONResult;
 }
 
 interface CheckpointRecord {
@@ -190,7 +191,7 @@ class PersistenceManager {
       sessionId,
       timestamp: entry.timestamp,
       operation: entry.operation,
-      data: redactValue(entry.data),
+      data: SuperJSON.serialize(redactValue(entry.data)),
     };
 
     const id = await this.db.wal.add(record);
@@ -205,12 +206,21 @@ class PersistenceManager {
       .and((r: WalRecord) => r.id > afterPosition)
       .toArray();
 
-    return records.map((r: WalRecord) => ({
-      id: r.id,
-      timestamp: r.timestamp,
-      operation: r.operation,
-      data: r.data,
-    }));
+    return records.map((r: WalRecord) => {
+      let data: unknown;
+      try {
+        data = SuperJSON.deserialize(r.data);
+      } catch (e) {
+        console.warn('[Persistence] Failed to deserialize WAL entry data:', e);
+        data = {};
+      }
+      return {
+        id: r.id,
+        timestamp: r.timestamp,
+        operation: r.operation,
+        data,
+      };
+    });
   }
 
   async getWalPosition(): Promise<number> {
@@ -258,7 +268,7 @@ class PersistenceManager {
       id: entry.id,
       sessionId: entry.sessionId,
       type: entry.type,
-      payload: redactValue(entry.payload),
+      payload: SuperJSON.serialize(redactValue(entry.payload)),
       priority: entry.priority,
       deadline: entry.deadline,
       retryPolicy: entry.retryPolicy,
@@ -399,9 +409,26 @@ class PersistenceManager {
               action: this.redactToolCall(step.action),
               expectedOutcome: redactText(step.expectedOutcome),
             })),
+            contingencies: state.plan.contingencies
+              ? new Map(
+                  Array.from(state.plan.contingencies.entries()).map(([key, steps]) => [
+                    key,
+                    steps.map(step => ({
+                      ...step,
+                      action: this.redactToolCall(step.action),
+                      expectedOutcome: redactText(step.expectedOutcome),
+                    })),
+                  ])
+                )
+              : state.plan.contingencies,
           }
         : null,
       variables: redactValue(state.variables) as Record<string, unknown>,
+      checkpoints: Array.isArray(state.checkpoints)
+        ? state.checkpoints.map(cp => ({ ...cp, stateSnapshot: redactValue(cp.stateSnapshot) }))
+        : state.checkpoints,
+      error: state.error ? redactText(state.error) : state.error,
+      allowlist: Array.isArray(state.allowlist) ? state.allowlist.map(u => redactText(u)) : state.allowlist,
       history: state.history.map(step => ({
         ...step,
         action: this.redactToolCall(step.action),
@@ -422,6 +449,13 @@ class PersistenceManager {
     };
   }
 
+  private sanitizeForSerialization(state: unknown): unknown {
+    if (state && typeof state === 'object') {
+      return { ...(state as any), pendingHumanIntervention: null };
+    }
+    return state;
+  }
+
   private serializeState(state: AgentState): any {
     return SuperJSON.serialize({ ...state });
   }
@@ -431,11 +465,18 @@ class PersistenceManager {
   }
 
   private deserializeTask(record: TaskRecord): TaskQueueEntry {
+    let payload: unknown;
+    try {
+      payload = SuperJSON.deserialize(record.payload);
+    } catch (e) {
+      console.warn('[Persistence] Failed to deserialize task payload:', e);
+      payload = {};
+    }
     return {
       id: record.id,
       sessionId: record.sessionId,
       type: record.type as any,
-      payload: record.payload,
+      payload,
       priority: record.priority,
       deadline: record.deadline,
       retryPolicy: record.retryPolicy as any,

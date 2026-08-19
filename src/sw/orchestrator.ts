@@ -762,7 +762,7 @@ export class AgentOrchestrator {
     // A failed step is escalated to the human, who decides retry / skip / abort.
     // The action arguments are redacted before they reach the side panel.
     return this.requestIntervention(step.id, step.action, {
-      error: result.error,
+      error: result.error ? redactText(result.error) : undefined,
       origin: await this.getCurrentOrigin(),
       action: step.action.name,
       target: this.actionTarget(step.action),
