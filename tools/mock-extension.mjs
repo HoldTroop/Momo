@@ -20,6 +20,8 @@
  *   interactive — tools/call get_interactive_elements, reply with an elements array
  *                 (role/label/state/bounds) to prove the bridge round-trips it
  *   timeout     — never reply, expect command_timeout (isError:true)
+ *   stale       — tools/call execute_action, reply with error:"stale_reference"
+ *                 to prove the bridge maps it to isError:true (M4)
  *
  * Env:
  *   BRIDGE_BIN              path to the binary (default ../target/debug/agent-bridge)
@@ -66,13 +68,17 @@ ws.onmessage = (event) => {
   if (msg.type === 'Ok' && msg.payload?.data?.status === 'ping') return; // heartbeat
   if (msg.type === 'Ok' && msg.payload?.data?.status === 'pong') {
     dbg('PONG received — connection registered. Sending tools/call to stdin.');
-    const tool = MODE === 'interactive' ? 'get_interactive_elements' : 'read_page_content';
+    const tool =
+      MODE === 'interactive' ? 'get_interactive_elements'
+      : MODE === 'stale' ? 'execute_action'
+      : 'read_page_content';
+    const args = MODE === 'stale' ? { action: 'click', ref: 'el_45' } : { tab_id: 17 };
     child.stdin.write(
       JSON.stringify({
         jsonrpc: '2.0',
         id: 7,
         method: 'tools/call',
-        params: { name: tool, arguments: { tab_id: 17 } },
+        params: { name: tool, arguments: args },
       }) + '\n',
     );
     return;
@@ -83,41 +89,53 @@ ws.onmessage = (event) => {
       dbg('Command received; deliberately NOT replying (timeout path).');
     } else {
       const command = msg.payload.command;
-      const result =
-        command === 'get_interactive_elements'
-          ? {
-              command,
-              status: 'ok',
-              url: 'https://example.com/page',
-              page_revision: 3,
-              elements: [
-                {
-                  ref: 'el_1',
-                  role: 'button',
-                  label: 'Save',
-                  state: [],
-                  tag: 'button',
-                  bounds: { x: 10, y: 20, width: 100, height: 50, top: 20, right: 110, bottom: 70, left: 10 },
-                },
-                {
-                  ref: 'el_2',
-                  role: 'textbox',
-                  label: 'Search',
-                  state: ['focused'],
-                  tag: 'input',
-                  bounds: { x: 10, y: 90, width: 200, height: 40, top: 90, right: 210, bottom: 130, left: 10 },
-                },
-              ],
-            }
-          : {
-              command,
-              status: 'ok',
-              title: 'Example',
-              url: 'https://example.com',
-              markdown_content: '# Heading\n\nBody',
-              ref_id_map: {},
-              page_revision: 2,
-            };
+      let result;
+      if (command === 'get_interactive_elements') {
+        result = {
+          command,
+          status: 'ok',
+          url: 'https://example.com/page',
+          page_revision: 3,
+          elements: [
+            {
+              ref: 'el_1',
+              role: 'button',
+              label: 'Save',
+              state: [],
+              tag: 'button',
+              bounds: { x: 10, y: 20, width: 100, height: 50, top: 20, right: 110, bottom: 70, left: 10 },
+            },
+            {
+              ref: 'el_2',
+              role: 'textbox',
+              label: 'Search',
+              state: ['focused'],
+              tag: 'input',
+              bounds: { x: 10, y: 90, width: 200, height: 40, top: 90, right: 210, bottom: 130, left: 10 },
+            },
+          ],
+        };
+      } else if (command === 'execute_action') {
+        // Simulate the extension's ToolResult when strict ref resolution fails
+        // (M4): error:"stale_reference" must map to isError:true on the bridge.
+        result = {
+          success: false,
+          error: 'stale_reference',
+          data: { error: 'stale_reference', ref: 'el_45', hint: 're-fetch get_interactive_elements' },
+          summary: 'execute_action click: stale reference el_45',
+          navigationOccurred: false,
+        };
+      } else {
+        result = {
+          command,
+          status: 'ok',
+          title: 'Example',
+          url: 'https://example.com',
+          markdown_content: '# Heading\n\nBody',
+          ref_id_map: {},
+          page_revision: 2,
+        };
+      }
       const reply = {
         type: 'COMMAND_RESULT',
         payload: { request_id: msg.payload.request_id, result },

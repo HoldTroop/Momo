@@ -35,14 +35,15 @@ export class MessageRouter {
   ]);
 
   /** Bridge → extension commands the service worker will honor. M1 exposed only
-   * `get_status`; M3 adds the read-only perception commands (§5). execute_action
-   * lands in M4. Unknown commands are answered with a `CommandResult` error,
-   * never silently ignored, so the bridge's `send_command` cannot hang past its
-   * timeout. */
+   * `get_status`; M3 adds the read-only perception commands (§5); M4 adds the
+   * write command `execute_action` (re-enters `executeToolCall`). Unknown
+   * commands are answered with a `CommandResult` error, never silently ignored,
+   * so the bridge's `send_command` cannot hang past its timeout. */
   private static readonly BRIDGE_COMMAND_ALLOWLIST: ReadonlySet<string> = new Set([
     'get_status',
     'read_page_content',
     'get_interactive_elements',
+    'execute_action',
   ]);
 
   private wsClient: ReturnType<typeof getWsClient> | null = null;
@@ -103,6 +104,8 @@ export class MessageRouter {
         return await this.readPageContent(params);
       case 'get_interactive_elements':
         return await this.getInteractiveElements(params);
+      case 'execute_action':
+        return await this.executeAction(params);
       default:
         throw new Error(`Unhandled bridge command: ${command}`);
     }
@@ -170,6 +173,22 @@ export class MessageRouter {
       page_revision: this.orchestrator.getState()?.pageRevision ?? 0,
       elements: perception?.elements || [],
     };
+  }
+
+  /** Write command (M4): re-enter the orchestrator's single tool-execution path
+   * so policy gating, strict-ref resolution, CDP dispatch, confirmation,
+   * redaction, and audit reporting are identical to Mode A. A failed strict-ref
+   * resolution surfaces as `error: "stale_reference"` on the returned tool
+   * result, which the bridge maps to an `isError: true` MCP response (§5.3). */
+  private async executeAction(params: unknown): Promise<unknown> {
+    if (!this.orchestrator.getState()) {
+      return { error: 'No active session' };
+    }
+    const args = (params && typeof params === 'object' ? params : {}) as Record<string, unknown>;
+    return this.orchestrator.executeToolCall(
+      { name: 'execute_action', arguments: args },
+      crypto.randomUUID(),
+    );
   }
 
   private registerHandlers() {

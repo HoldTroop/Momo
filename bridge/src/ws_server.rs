@@ -543,6 +543,61 @@ mod tests {
         assert_eq!(embedded["url"], "https://example.com");
     }
 
+    /// M4: a `tools/call execute_action` whose `CommandResult` carries
+    /// `error: "stale_reference"` must map to an MCP `isError: true` result with
+    /// the structured error embedded — the LLM's signal to re-fetch (§5.3).
+    #[tokio::test]
+    async fn mcp_tools_call_stale_reference_returns_is_error() {
+        let (mgr, port) = start_server().await;
+        let mut client = connect_client(&mgr, port).await;
+
+        let mgr2 = mgr.clone();
+        let call = tokio::spawn(async move {
+            crate::mcp_stdio::handle_message(
+                &mgr2,
+                r#"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"execute_action","arguments":{"action":"click","ref":"el_45"}}}"#,
+            )
+            .await
+        });
+
+        // The "extension" receives the execute_action Command and replies with a
+        // stale_reference CommandResult.
+        let frame = read_until(&mut client, std::time::Duration::from_secs(5), |v| v["type"] == "Command")
+            .await
+            .expect("Command frame");
+        assert_eq!(frame["payload"]["command"], "execute_action");
+        assert_eq!(frame["payload"]["params"]["ref"], "el_45");
+        let request_id = frame["payload"]["request_id"].as_str().unwrap().to_string();
+
+        let reply = serde_json::json!({
+            "type": "COMMAND_RESULT",
+            "payload": {
+                "request_id": request_id,
+                "result": {
+                    "success": false,
+                    "error": "stale_reference",
+                    "data": { "error": "stale_reference", "ref": "el_45", "hint": "re-fetch get_interactive_elements" },
+                    "summary": "execute_action click: stale reference el_45",
+                    "navigationOccurred": false
+                }
+            }
+        });
+        client
+            .send(WsMessage::Binary(serde_json::to_vec(&reply).unwrap().into()))
+            .await
+            .unwrap();
+
+        let response = call.await.unwrap().expect("MCP response line");
+        let v: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(v["id"], 11);
+        assert_eq!(v["result"]["isError"], true);
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        let embedded: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(embedded["error"], "stale_reference");
+        assert_eq!(embedded["data"]["ref"], "el_45");
+        assert_eq!(embedded["data"]["hint"], "re-fetch get_interactive_elements");
+    }
+
     /// Timeout path: a connected extension that never answers a Command must
     /// resolve as `command_timeout` (isError:true) at the MCP layer — not hang,
     /// and not surface as a JSON-RPC error. 30 s by design (COMMAND_TIMEOUT), so

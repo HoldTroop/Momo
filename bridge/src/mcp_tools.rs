@@ -152,13 +152,34 @@ pub async fn handle_tools_call(
 /// outcome to the MCP result shape. All four v1 tools are Commands (§6.2).
 async fn dispatch_tool_call(cm: &ConnectionManager, name: &str, arguments: Value) -> Value {
     match cm.send_command(name, arguments).await {
-        Ok(result) => tool_ok(&result),
+        Ok(result) => map_command_result(&result),
         Err(CommandError::Disconnected) => {
             tool_error(&json!({ "error": "bridge_disconnected", "command": name }))
         }
         Err(CommandError::Timeout) => {
             tool_error(&json!({ "error": "command_timeout", "command": name }))
         }
+    }
+}
+
+/// Map a *transport-successful* `CommandResult` to the MCP result shape. Any
+/// tool-layer *semantic failure* — an explicit `success: false` ToolResult (a
+/// `stale_reference`, a missing ref, a CDP session being unavailable, …) or a
+/// bare `{ error: … }` object from an early guard / thrown dispatch error —
+/// must surface as `isError: true` so the LLM sees the execution failure and
+/// reacts instead of hallucinating success (§5.3, §6.4). Every other payload is
+/// a success.
+fn map_command_result(result: &Value) -> Value {
+    let success = result.get("success").and_then(Value::as_bool);
+    let has_error = result.get("error").is_some();
+    // Fail when the tool explicitly reported `success: false`, or when it
+    // returned a bare error object with no `success` field (early guard like
+    // "No active session", or a thrown dispatch error).
+    let failed = success == Some(false) || (success.is_none() && has_error);
+    if failed {
+        tool_error(result)
+    } else {
+        tool_ok(result)
     }
 }
 
@@ -216,5 +237,61 @@ mod tests {
         assert_eq!(execute["inputSchema"]["required"], json!(["action"]));
         let action_enum = &execute["inputSchema"]["properties"]["action"]["enum"];
         assert_eq!(action_enum, &json!(["click", "type", "scroll", "navigate"]));
+    }
+
+    #[test]
+    fn stale_reference_maps_to_is_error_true() {
+        // The shape the extension's execute_action tool returns when strict ref
+        // resolution fails (ToolResult with error: "stale_reference").
+        let stale = json!({
+            "success": false,
+            "error": "stale_reference",
+            "data": { "error": "stale_reference", "ref": "el_45", "hint": "re-fetch get_interactive_elements" },
+            "summary": "execute_action click: stale reference el_45",
+            "navigationOccurred": false
+        });
+        let out = map_command_result(&stale);
+        assert_eq!(out["isError"], true);
+        let text = out["content"][0]["text"].as_str().unwrap();
+        let embedded: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(embedded["error"], "stale_reference");
+        assert_eq!(embedded["data"]["ref"], "el_45");
+        assert_eq!(embedded["data"]["hint"], "re-fetch get_interactive_elements");
+    }
+
+    #[test]
+    fn success_payload_maps_to_is_error_false() {
+        let ok = json!({
+            "success": true,
+            "data": { "ref": "el_1", "x": 10, "y": 20 },
+            "summary": "Clicked ref el_1",
+            "navigationOccurred": false
+        });
+        let out = map_command_result(&ok);
+        assert_eq!(out["isError"], false);
+    }
+
+    #[test]
+    fn any_semantic_failure_maps_to_is_error_true() {
+        // M4 broadening: NOT just stale_reference — any `success: false`
+        // ToolResult (missing ref, CDP session unavailable, …) must surface as
+        // `isError: true` so the LLM sees the execution failure instead of
+        // hallucinating success.
+        let missing_ref = json!({ "success": false, "error": "Missing ref for click", "summary": "execute_action click: missing ref" });
+        let out = map_command_result(&missing_ref);
+        assert_eq!(out["isError"], true);
+        let text = out["content"][0]["text"].as_str().unwrap();
+        let embedded: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(embedded["error"], "Missing ref for click");
+    }
+
+    #[test]
+    fn bare_error_object_maps_to_is_error_true() {
+        // Early guards (e.g. "No active session") and thrown dispatch errors
+        // come back as a plain `{ error: … }` object with no `success` field;
+        // treat those as failures too.
+        let bare = json!({ "error": "No active session" });
+        let out = map_command_result(&bare);
+        assert_eq!(out["isError"], true);
     }
 }
