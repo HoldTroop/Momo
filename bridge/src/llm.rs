@@ -4,6 +4,16 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use reqwest::Client;
 
+const MAX_LINE_BYTES: usize = 1024 * 1024;
+
+fn truncate(s: &str, max: usize) -> String {
+    let mut out: String = s.chars().take(max).collect();
+    if s.chars().count() > max {
+        out.push('\u{2026}');
+    }
+    out
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
@@ -123,6 +133,16 @@ struct AnthropicStreamEvent {
     r#type: String,
     index: Option<u32>,
     delta: Option<AnthropicDelta>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content_block: Option<AnthropicContent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<AnthropicError>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AnthropicError {
+    r#type: Option<String>,
+    message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,7 +186,7 @@ impl LlmGateway {
     }
 
     pub async fn complete(&self, model: &str, messages: Vec<ChatMessage>, tools: Option<Vec<Tool>>) -> Result<Value> {
-        if model.starts_with("claude") {
+        if is_anthropic_model(model) {
             self.complete_anthropic(model, messages, tools).await
         } else {
             self.complete_ollama(model, messages, tools, false).await
@@ -180,7 +200,7 @@ impl LlmGateway {
         tools: Option<Vec<Tool>>,
         tx: mpsc::Sender<Value>,
     ) -> Result<()> {
-        if model.starts_with("claude") {
+        if is_anthropic_model(model) {
             self.stream_anthropic(model, messages, tools, tx).await
         } else {
             self.stream_ollama(model, messages, tools, tx).await
@@ -203,6 +223,11 @@ impl LlmGateway {
         };
 
         let resp = self.client.post(&url).json(&request).send().await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("LLM HTTP {status}: {}", truncate(&body, 500)));
+        }
         let response: OllamaResponse = resp.json().await?;
 
         Ok(serde_json::json!({
@@ -229,6 +254,11 @@ impl LlmGateway {
         };
 
         let resp = self.client.post(&url).json(&request).send().await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("LLM HTTP {status}: {}", truncate(&body, 500)));
+        }
         let mut stream = resp.bytes_stream();
 
         use futures::StreamExt;
@@ -240,20 +270,24 @@ impl LlmGateway {
 
             // Try to parse complete JSON objects from buffer
             while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
-                let line = buffer.drain(..=pos).collect::<Vec<_>>();
-                let line_str = String::from_utf8_lossy(&line).trim().to_string();
-
-                if line_str.is_empty() { continue; }
-
-                if let Ok(resp) = serde_json::from_str::<OllamaResponse>(&line_str) {
-                    let _ = tx.send(serde_json::json!({
-                        "content": resp.message.content,
-                        "tool_calls": resp.message.tool_calls,
-                        "done": resp.done,
-                    })).await;
-
-                    if resp.done { return Ok(()); }
+                if pos > MAX_LINE_BYTES {
+                    return Err(anyhow::anyhow!("Ollama stream line exceeds {} byte limit", MAX_LINE_BYTES));
                 }
+                let line = buffer.drain(..=pos).collect::<Vec<_>>();
+                if process_ollama_line(&tx, &line).await? {
+                    return Ok(());
+                }
+            }
+
+            if buffer.len() > MAX_LINE_BYTES {
+                return Err(anyhow::anyhow!("Ollama stream line exceeds {} byte limit", MAX_LINE_BYTES));
+            }
+        }
+
+        // L4: process a trailing partial line (no trailing newline)
+        if !buffer.iter().all(|b| b.is_ascii_whitespace()) {
+            if process_ollama_line(&tx, &buffer).await? {
+                return Ok(());
             }
         }
 
@@ -264,13 +298,7 @@ impl LlmGateway {
         let key = self.anthropic_key.as_ref()
             .ok_or_else(|| anyhow::anyhow!("Anthropic API key not set"))?;
 
-        let anthropic_messages = messages.into_iter().map(|m| AnthropicMessage {
-            role: m.role,
-            content: match m.tool_calls {
-                Some(tool_calls) => serde_json::to_value(tool_calls).unwrap_or(Value::Null),
-                None => serde_json::json!([{ "type": "text", "text": m.content }]),
-            },
-        }).collect();
+        let anthropic_messages = to_anthropic_messages(messages);
 
         let anthropic_tools = tools.map(|t| t.into_iter().map(|tool| AnthropicTool {
             name: tool.function.name,
@@ -295,6 +323,12 @@ impl LlmGateway {
             .json(&request)
             .send()
             .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("LLM HTTP {status}: {}", truncate(&body, 500)));
+        }
 
         let response: AnthropicResponse = resp.json().await?;
 
@@ -329,13 +363,7 @@ impl LlmGateway {
         let key = self.anthropic_key.as_ref()
             .ok_or_else(|| anyhow::anyhow!("Anthropic API key not set"))?;
 
-        let anthropic_messages = messages.into_iter().map(|m| AnthropicMessage {
-            role: m.role,
-            content: match m.tool_calls {
-                Some(tool_calls) => serde_json::to_value(tool_calls).unwrap_or(Value::Null),
-                None => serde_json::json!([{ "type": "text", "text": m.content }]),
-            },
-        }).collect();
+        let anthropic_messages = to_anthropic_messages(messages);
 
         let anthropic_tools = tools.map(|t| t.into_iter().map(|tool| AnthropicTool {
             name: tool.function.name,
@@ -361,8 +389,15 @@ impl LlmGateway {
             .send()
             .await?;
 
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("LLM HTTP {status}: {}", truncate(&body, 500)));
+        }
+
         let mut stream = resp.bytes_stream();
         let mut buffer = Vec::new();
+        let mut tool_blocks: std::collections::HashMap<u32, (String, String)> = std::collections::HashMap::new();
 
         use futures::StreamExt;
 
@@ -371,35 +406,161 @@ impl LlmGateway {
             buffer.extend_from_slice(&chunk);
 
             while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
-                let line = buffer.drain(..=pos).collect::<Vec<_>>();
-                let line_str = String::from_utf8_lossy(&line).trim().to_string();
-
-                if !line_str.starts_with("data: ") { continue; }
-                let data = &line_str[6..];
-                if data == "[DONE]" { break; }
-
-                if let Ok(event) = serde_json::from_str::<AnthropicStreamEvent>(data) {
-                    match event.r#type.as_str() {
-                        "content_block_delta" => {
-                            if let Some(delta) = event.delta {
-                                if let Some(text) = delta.text {
-                                    let _ = tx.send(serde_json::json!({ "content": text, "done": false })).await;
-                                }
-                                if let Some(partial) = delta.partial_json {
-                                    let _ = tx.send(serde_json::json!({ "tool_call_delta": partial, "done": false })).await;
-                                }
-                            }
-                        }
-                        "message_stop" => {
-                            let _ = tx.send(serde_json::json!({ "done": true })).await;
-                            return Ok(());
-                        }
-                        _ => {}
-                    }
+                if pos > MAX_LINE_BYTES {
+                    return Err(anyhow::anyhow!("Anthropic stream line exceeds {} byte limit", MAX_LINE_BYTES));
                 }
+                let line = buffer.drain(..=pos).collect::<Vec<_>>();
+                if process_anthropic_line(&tx, &mut tool_blocks, &line).await? {
+                    return Ok(());
+                }
+            }
+
+            if buffer.len() > MAX_LINE_BYTES {
+                return Err(anyhow::anyhow!("Anthropic stream line exceeds {} byte limit", MAX_LINE_BYTES));
+            }
+        }
+
+        // L4: process a trailing partial line (no trailing newline)
+        if !buffer.iter().all(|b| b.is_ascii_whitespace()) {
+            if process_anthropic_line(&tx, &mut tool_blocks, &buffer).await? {
+                return Ok(());
             }
         }
 
         Ok(())
+    }
+}
+
+fn is_anthropic_model(model: &str) -> bool {
+    model.to_lowercase().starts_with("claude")
+}
+
+fn to_anthropic_messages(messages: Vec<ChatMessage>) -> Vec<AnthropicMessage> {
+    messages.into_iter().map(|m| {
+        if let Some(tool_calls) = m.tool_calls {
+            let blocks: Vec<Value> = tool_calls.into_iter().map(|tc| {
+                let input = serde_json::from_str::<Value>(&tc.function.arguments).unwrap_or(Value::Null);
+                serde_json::json!({
+                    "type": "tool_use",
+                    "id": tc.id,
+                    "name": tc.function.name,
+                    "input": input,
+                })
+            }).collect();
+            AnthropicMessage { role: m.role, content: Value::Array(blocks) }
+        } else if m.role == "tool" {
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([{
+                    "type": "tool_result",
+                    "tool_use_id": m.tool_call_id.unwrap_or_default(),
+                    "content": m.content,
+                }]),
+            }
+        } else {
+            AnthropicMessage {
+                role: m.role,
+                content: serde_json::json!([{ "type": "text", "text": m.content }]),
+            }
+        }
+    }).collect()
+}
+
+async fn process_ollama_line(tx: &mpsc::Sender<Value>, line: &[u8]) -> Result<bool> {
+    let line_str = String::from_utf8_lossy(line).trim().to_string();
+
+    if line_str.is_empty() { return Ok(false); }
+
+    if let Ok(resp) = serde_json::from_str::<OllamaResponse>(&line_str) {
+        let _ = tx.send(serde_json::json!({
+            "content": resp.message.content,
+            "tool_calls": resp.message.tool_calls,
+            "done": resp.done,
+        })).await;
+
+        return Ok(resp.done);
+    }
+
+    if let Ok(v) = serde_json::from_str::<Value>(&line_str) {
+        if let Some(err) = v.get("error") {
+            if !err.is_null() {
+                let msg = err.as_str().map(|s| s.to_string()).unwrap_or_else(|| err.to_string());
+                return Err(anyhow::anyhow!("Ollama stream error: {msg}"));
+            }
+        }
+    }
+
+    Ok(false)
+}
+
+async fn process_anthropic_line(
+    tx: &mpsc::Sender<Value>,
+    tool_blocks: &mut std::collections::HashMap<u32, (String, String)>,
+    line: &[u8],
+) -> Result<bool> {
+    let line_str = String::from_utf8_lossy(line).trim().to_string();
+
+    if !line_str.starts_with("data: ") { return Ok(false); }
+    let data = &line_str[6..];
+
+    if data == "[DONE]" {
+        let _ = tx.send(serde_json::json!({ "done": true })).await;
+        return Ok(true);
+    }
+
+    if let Ok(event) = serde_json::from_str::<AnthropicStreamEvent>(data) {
+        match event.r#type.as_str() {
+            "content_block_start" => {
+                if let Some(cb) = event.content_block {
+                    if cb.r#type == "tool_use" {
+                        let index = event.index.unwrap_or(0);
+                        tool_blocks.insert(index, (cb.id.unwrap_or_default(), cb.name.unwrap_or_default()));
+                    }
+                }
+                Ok(false)
+            }
+            "content_block_delta" => {
+                if let Some(delta) = event.delta {
+                    if let Some(text) = delta.text {
+                        let _ = tx.send(serde_json::json!({ "content": text, "done": false })).await;
+                    }
+                    if let Some(partial) = delta.partial_json {
+                        let (id, name) = event.index
+                            .and_then(|i| tool_blocks.get(&i))
+                            .cloned()
+                            .unwrap_or_default();
+                        let _ = tx.send(serde_json::json!({
+                            "tool_call_delta": partial,
+                            "tool_call_id": id,
+                            "tool_call_name": name,
+                            "done": false,
+                        })).await;
+                    }
+                }
+                Ok(false)
+            }
+            "message_stop" => {
+                let _ = tx.send(serde_json::json!({ "done": true })).await;
+                Ok(true)
+            }
+            "error" => {
+                let msg = event.error.as_ref()
+                    .and_then(|e| e.message.clone())
+                    .unwrap_or_else(|| "unknown error".to_string());
+                Err(anyhow::anyhow!("Anthropic stream error: {msg}"))
+            }
+            _ => Ok(false),
+        }
+    } else if let Ok(v) = serde_json::from_str::<Value>(data) {
+        if v.get("type").and_then(|t| t.as_str()) == Some("error") {
+            let msg = v.get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown error");
+            return Err(anyhow::anyhow!("Anthropic stream error: {msg}"));
+        }
+        Ok(false)
+    } else {
+        Ok(false)
     }
 }

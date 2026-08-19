@@ -262,23 +262,32 @@ async fn dispatch_tool_call(cm: &ConnectionManager, name: &str, arguments: Value
 }
 
 /// Map a *transport-successful* `CommandResult` to the MCP result shape. Any
-/// tool-layer *semantic failure* — an explicit `success: false` ToolResult (a
-/// `stale_reference`, a missing ref, a CDP session being unavailable, …) or a
-/// bare `{ error: … }` object from an early guard / thrown dispatch error —
-/// must surface as `isError: true` so the LLM sees the execution failure and
-/// reacts instead of hallucinating success (§5.3, §6.4). Every other payload is
-/// a success.
+/// tool-layer *semantic failure* must surface as `isError: true` so the LLM
+/// sees the execution failure and reacts instead of hallucinating success
+/// (§5.3, §6.4). Strict mapping (M3):
+/// - a non-null `error` field → error, regardless of `success` (even a
+///   `success: true` + `error` payload is inconsistent and fails);
+/// - `success` missing or NOT a JSON boolean → "malformed result" error
+///   (a string `"false"` is not a boolean and fails);
+/// - otherwise `isError = !success`.
 fn map_command_result(result: &Value) -> Value {
-    let success = result.get("success").and_then(Value::as_bool);
-    let has_error = result.get("error").is_some();
-    // Fail when the tool explicitly reported `success: false`, or when it
-    // returned a bare error object with no `success` field (early guard like
-    // "No active session", or a thrown dispatch error).
-    let failed = success == Some(false) || (success.is_none() && has_error);
-    if failed {
-        tool_error(result)
-    } else {
-        tool_ok(result)
+    // A non-null `error` field (early guard like "No active session", a thrown
+    // dispatch error, or an inconsistent success+error payload) always fails.
+    if result.get("error").map_or(false, |e| !e.is_null()) {
+        return tool_error(result);
+    }
+    match result.get("success").and_then(Value::as_bool) {
+        // `success` missing (bare data payload) or a non-boolean JSON value
+        // (e.g. the string "false") → malformed: the tool layer must always
+        // report a boolean `success`.
+        None => tool_error(&json!({ "error": "malformed result" })),
+        Some(success) => {
+            if success {
+                tool_ok(result)
+            } else {
+                tool_error(result)
+            }
+        }
     }
 }
 

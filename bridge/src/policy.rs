@@ -142,6 +142,7 @@ pub struct PolicyEngine {
     db: Arc<Mutex<Connection>>,
     token_usage: RwLock<u64>,
     last_reset: RwLock<DateTime<Utc>>,
+    mcp_mode: RwLock<bool>,
 }
 
 impl PolicyEngine {
@@ -154,6 +155,7 @@ impl PolicyEngine {
             db: Arc::new(Mutex::new(db)),
             token_usage: RwLock::new(0),
             last_reset: RwLock::new(Utc::now()),
+            mcp_mode: RwLock::new(false),
         })
     }
 
@@ -291,9 +293,13 @@ impl PolicyEngine {
     pub fn check_action_permitted(&self, action: &str) -> bool {
         let config = self.config.read();
         if config.permitted_actions.is_empty() {
-            return true; // No restrictions
+            return !*self.mcp_mode.read();
         }
         config.permitted_actions.contains(&action.to_string())
+    }
+
+    pub fn set_mcp_mode(&self, enabled: bool) {
+        *self.mcp_mode.write() = enabled;
     }
 
     pub fn evaluate(&self, request: &PolicyRequest) -> Result<PolicyDecision> {
@@ -345,16 +351,29 @@ impl PolicyEngine {
         // Determine risk class
         let risk_class = self.classify_risk(&request.action);
 
-        // Check token budget
+        // Check token budget (H55): reset window, check, and deduct inside a
+        // single critical section so concurrent evaluations cannot race the
+        // check against the write.
         let tokens_needed = self.estimate_tokens(&request.action);
-        if !self.check_token_budget(tokens_needed) {
-            return Ok(PolicyDecision {
-                allowed: false,
-                requires_confirmation: false,
-                reason: Some("Token budget exceeded".to_string()),
-                risk_class: risk_class.clone(),
-                confirmation_data: None,
-            });
+        {
+            let mut usage = self.token_usage.write();
+            let mut last_reset = self.last_reset.write();
+            if Utc::now().signed_duration_since(*last_reset)
+                >= chrono::Duration::hours(config.token_budget.reset_interval_hours as i64)
+            {
+                *usage = 0;
+                *last_reset = Utc::now();
+            }
+            if *usage + tokens_needed > config.token_budget.max_tokens {
+                return Ok(PolicyDecision {
+                    allowed: false,
+                    requires_confirmation: false,
+                    reason: Some("Token budget exceeded".to_string()),
+                    risk_class: risk_class.clone(),
+                    confirmation_data: None,
+                });
+            }
+            *usage += tokens_needed;
         }
 
         // Determine if confirmation needed
@@ -380,25 +399,32 @@ impl PolicyEngine {
             },
         };
 
-        // Deduct tokens
-        self.deduct_tokens(tokens_needed);
-
         Ok(decision)
     }
 
     fn classify_risk(&self, action: &str) -> RiskClass {
-        match action {
-            "navigate" => RiskClass::Navigation,
-            "click" => RiskClass::Write,
-            "type" => RiskClass::Write,
-            "extract" => RiskClass::Read,
-            "scroll" => RiskClass::Read,
-            "wait" => RiskClass::Read,
-            "observe" => RiskClass::Read,
-            "mouse_move" => RiskClass::Read,
-            "human_click" => RiskClass::Write,
-            "human_type" => RiskClass::Write,
-            _ => RiskClass::Write,
+        let action = action.to_lowercase();
+        if action.contains("navigate") {
+            RiskClass::Navigation
+        } else if ["pay", "purchase", "checkout", "transfer"]
+            .iter()
+            .any(|kw| action.contains(kw))
+        {
+            RiskClass::Payment
+        } else if ["auth", "login", "logout", "password"]
+            .iter()
+            .any(|kw| action.contains(kw))
+        {
+            RiskClass::Auth
+        } else if action.contains("dangerous") {
+            RiskClass::Dangerous
+        } else if ["observe", "read", "extract", "status"]
+            .iter()
+            .any(|kw| action.contains(kw))
+        {
+            RiskClass::Read
+        } else {
+            RiskClass::Write
         }
     }
 
@@ -416,17 +442,6 @@ impl PolicyEngine {
             "human_type" => 5,
             _ => 10,
         }
-    }
-
-    fn check_token_budget(&self, tokens: u64) -> bool {
-        let usage = *self.token_usage.read();
-        let config = self.config.read();
-        usage + tokens <= config.token_budget.max_tokens
-    }
-
-    fn deduct_tokens(&self, tokens: u64) {
-        let mut usage = self.token_usage.write();
-        *usage += tokens;
     }
 
     fn requires_confirmation(&self, config: &PolicyConfig, risk_class: &RiskClass, request: &PolicyRequest) -> bool {
@@ -503,19 +518,24 @@ impl PolicyEngine {
         error: Option<String>,
     ) -> Result<usize> {
         let db = self.db.lock().unwrap();
+        let pending = serde_json::to_string(&AuditOutcome::Pending)?;
+        let escalated = serde_json::to_string(&AuditOutcome::Escalated)?;
         let changed = db.execute(
-            "UPDATE audit_log SET outcome = ?, error = ? WHERE action_hash = ? AND session_id = ?",
+            "UPDATE audit_log SET outcome = ?, error = ? WHERE id = (SELECT id FROM audit_log WHERE action_hash = ? AND session_id = ? AND outcome IN (?, ?) ORDER BY id DESC LIMIT 1)",
             params![
                 serde_json::to_string(&outcome)?,
                 error,
                 action_hash,
                 session_id,
+                pending,
+                escalated,
             ],
         )?;
         Ok(changed)
     }
 
     pub fn get_audit_log(&self, session_id: Option<&str>, limit: usize) -> Result<Vec<AuditEntry>> {
+        let limit = limit.min(1000);
         let db = self.db.lock().unwrap();
         let mut query = String::from("SELECT id, timestamp, session_id, action, origin, target, arguments, risk_class, outcome, action_hash, page_revision, user_confirmed, error FROM audit_log");
         let mut params_vec = vec![];
@@ -531,34 +551,38 @@ impl PolicyEngine {
         let mut stmt = db.prepare(&query)?;
         let param_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
 
-        let entries = stmt.query_map(&*param_refs, |row| {
-            Ok(AuditEntry {
-                id: row.get(0)?,
-                timestamp: DateTime::parse_from_rfc3339(&row.get::<_, String>(1)?).unwrap().with_timezone(&Utc),
-                session_id: row.get(2)?,
-                action: row.get(3)?,
-                origin: row.get(4)?,
-                target: row.get(5)?,
-                arguments: serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or(Value::Null),
-                risk_class: serde_json::from_str(&row.get::<_, String>(7)?).unwrap_or(RiskClass::Write),
-                outcome: serde_json::from_str(&row.get::<_, String>(8)?).unwrap_or(AuditOutcome::Failed),
-                action_hash: row.get(9)?,
-                page_revision: row.get(10)?,
-                user_confirmed: row.get(11)?,
-                error: row.get(12)?,
-            })
-        })?.collect::<Result<Vec<_>, _>>()?;
+        let entries = stmt
+            .query_map(&*param_refs, |row| {
+                let timestamp = match DateTime::parse_from_rfc3339(&row.get::<_, String>(1)?) {
+                    Ok(ts) => ts.with_timezone(&Utc),
+                    Err(_) => return Ok(None),
+                };
+                Ok(Some(AuditEntry {
+                    id: row.get(0)?,
+                    timestamp,
+                    session_id: row.get(2)?,
+                    action: row.get(3)?,
+                    origin: row.get(4)?,
+                    target: row.get(5)?,
+                    arguments: serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or(Value::Null),
+                    risk_class: serde_json::from_str(&row.get::<_, String>(7)?).unwrap_or(RiskClass::Write),
+                    outcome: serde_json::from_str(&row.get::<_, String>(8)?).unwrap_or(AuditOutcome::Failed),
+                    action_hash: row.get(9)?,
+                    page_revision: row.get(10)?,
+                    user_confirmed: row.get(11)?,
+                    error: row.get(12)?,
+                }))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect();
 
         Ok(entries)
     }
 
     pub fn get_token_usage(&self) -> u64 {
         *self.token_usage.read()
-    }
-
-    pub fn reset_token_budget(&self) {
-        *self.token_usage.write() = 0;
-        *self.last_reset.write() = Utc::now();
     }
 
     pub fn get_config(&self) -> PolicyConfig {

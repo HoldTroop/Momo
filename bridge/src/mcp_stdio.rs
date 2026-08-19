@@ -5,13 +5,13 @@
 //! frames; all diagnostics go to stderr so the MCP client's parser is never
 //! corrupted (§4.4).
 
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::sync::Arc;
 
 use anyhow::Result;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::mcp_tools;
 use crate::ws_server::ConnectionManager;
@@ -30,6 +30,11 @@ struct JsonRpcMessage {
     params: Option<Value>,
 }
 
+/// Maximum accepted NDJSON line size (1 MiB). A longer line without a newline
+/// is a protocol error: it is dropped and the rest of the line is drained so a
+/// hostile client cannot grow the read buffer without bound.
+const MAX_LINE_BYTES: usize = 1_048_576;
+
 /// Run the MCP stdio loop until stdin closes. This is the Mode B foreground
 /// task; the WebSocket server runs on a separate background task (spawned by
 /// `main`), and both share the same `ConnectionManager` (§3.2).
@@ -39,16 +44,48 @@ pub async fn run(connection_manager: Arc<ConnectionManager>) -> Result<()> {
     let mut reader = io::BufReader::new(stdin.lock());
     let stdout = io::stdout();
     let mut out = stdout.lock();
-    let mut line = String::new();
 
     loop {
-        line.clear();
-        let n = reader.read_line(&mut line)?;
+        // `take` makes the reader report EOF after MAX_LINE_BYTES + 1 bytes,
+        // so `read_until` cannot grow `line` past the cap even if the newline
+        // never arrives.
+        let mut line: Vec<u8> = Vec::new();
+        let n = {
+            let mut limited = (&mut reader).take(MAX_LINE_BYTES as u64 + 1);
+            limited.read_until(b'\n', &mut line)?
+        };
         if n == 0 {
             debug!("stdin closed, exiting MCP loop");
             break;
         }
 
+        if line.len() > MAX_LINE_BYTES && !line.ends_with(b"\n") {
+            // Hit the cap without a newline: protocol error. Drop the rest of
+            // the line (bounded memory) and keep reading.
+            warn!(
+                "MCP line exceeds {} bytes without a newline; dropping it",
+                MAX_LINE_BYTES
+            );
+            loop {
+                let buf = reader.fill_buf()?;
+                if buf.is_empty() {
+                    break; // EOF
+                }
+                match buf.iter().position(|&b| b == b'\n') {
+                    Some(pos) => {
+                        reader.consume(pos + 1);
+                        break;
+                    }
+                    None => {
+                        let len = buf.len();
+                        reader.consume(len);
+                    }
+                }
+            }
+            continue;
+        }
+
+        let line = String::from_utf8_lossy(&line);
         if let Some(response) = handle_message(&connection_manager, &line).await {
             out.write_all(response.as_bytes())?;
             out.write_all(b"\n")?;

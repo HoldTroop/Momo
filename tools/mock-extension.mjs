@@ -133,6 +133,7 @@ ws.onmessage = (event) => {
         result = {
           command,
           status: 'ok',
+          success: true,
           url: 'https://example.com/page',
           page_revision: 3,
           elements: [
@@ -168,6 +169,7 @@ ws.onmessage = (event) => {
         result = {
           command,
           status: 'ok',
+          success: true,
           title: 'Example',
           url: 'https://example.com',
           markdown_content: '# Heading\n\nBody',

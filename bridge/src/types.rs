@@ -34,7 +34,6 @@ pub enum VerificationRule {
     ElementHidden(String),
     TextContains(String, String), // selector, text
     UrlMatches(String), // regex
-    Custom(String), // JS expression
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +58,7 @@ pub struct ToolCall {
     pub name: String,
     pub arguments: serde_json::Value,
     /// Optional ref_id for stable element targeting (perception upgrade)
+    #[serde(default)]
     pub ref_id: Option<String>,
 }
 
@@ -68,6 +68,8 @@ pub struct ToolResult {
     pub data: Option<serde_json::Value>,
     pub error: Option<String>,
     pub summary: String,
+    /// The wire format uses camelCase (`navigationOccurred`).
+    #[serde(rename = "navigationOccurred")]
     pub navigation_occurred: bool,
 }
 
@@ -88,8 +90,10 @@ pub struct CompressedDom {
     pub layout: LayoutNode,
     pub timestamp: i64,
     /// Optional Markdown content from Readability+Turndown (perception upgrade)
+    #[serde(default)]
     pub markdown_content: Option<String>,
     /// Optional selector → ref_id mapping for stable element targeting
+    #[serde(default)]
     pub ref_id_map: Option<std::collections::HashMap<String, String>>,
 }
 
@@ -187,7 +191,10 @@ pub struct ObservationSubmit {
     pub session_id: String,
     pub origin: String,
     pub dom: CompressedDom,
+    /// Added after v0.1: an older counterpart may omit these, so they default.
+    #[serde(default)]
     pub markdown_content: String,
+    #[serde(default)]
     pub ref_id_map: std::collections::HashMap<String, String>,
     pub page_revision: u64,
 }

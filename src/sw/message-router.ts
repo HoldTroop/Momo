@@ -44,6 +44,7 @@ export class MessageRouter {
     'read_page_content',
     'get_interactive_elements',
     'execute_action',
+    'list_tabs',
   ]);
 
   private wsClient: ReturnType<typeof getWsClient> | null = null;
@@ -106,6 +107,8 @@ export class MessageRouter {
         return await this.getInteractiveElements(params);
       case 'execute_action':
         return await this.executeAction(params);
+      case 'list_tabs':
+        return await this.listTabs();
       default:
         throw new Error(`Unhandled bridge command: ${command}`);
     }
@@ -189,6 +192,23 @@ export class MessageRouter {
       { name: 'execute_action', arguments: args },
       crypto.randomUUID(),
     );
+  }
+
+  /** Enumerate tabs for MCP multi-tab orchestration (§5.4). Titles and URLs are
+   * redacted before leaving the extension. */
+  private async listTabs(): Promise<unknown> {
+    const tabs = await chrome.tabs.query({});
+    return {
+      command: 'list_tabs',
+      status: 'ok',
+      tabs: tabs.map(t => ({
+        tab_id: t.id,
+        window_id: t.windowId,
+        active: t.active,
+        title: redactText(t.title ?? ''),
+        url: redactText(t.url ?? ''),
+      })),
+    };
   }
 
   private registerHandlers() {
