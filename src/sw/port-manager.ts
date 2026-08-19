@@ -3,7 +3,7 @@ import { MessageRouter } from './message-router.js';
 interface PortConnection {
   port: chrome.runtime.Port;
   tabId?: number;
-  type: 'sidepanel' | 'content' | 'devtools' | 'offscreen' | 'unknown';
+  type: 'sidepanel' | 'content' | 'devtools' | 'unknown';
   connectedAt: number;
   lastActivity: number;
 }
@@ -21,7 +21,7 @@ export class PortManager {
 
   handlePort(port: chrome.runtime.Port) {
     // Only self-origin, non-tab extension contexts may open a control port.
-    // `port.sender` is undefined for extension pages (side panel / offscreen);
+    // `port.sender` is undefined for extension pages (side panel);
     // it is populated for content scripts (tab) and for web pages / other
     // extensions. Reject both so privileged messages cannot be routed through an
     // untrusted connection.
@@ -61,7 +61,6 @@ export class PortManager {
     if (port.name === 'sidepanel') return 'sidepanel';
     if (port.name === 'content-script') return 'content';
     if (port.name === 'devtools') return 'devtools';
-    if (port.name === 'offscreen') return 'offscreen';
     return 'unknown';
   }
 
@@ -74,9 +73,7 @@ export class PortManager {
     try {
       let response: unknown;
 
-      if (msg.type === 'PING') {
-        response = { type: 'PONG', timestamp: Date.now() };
-      } else if (msg.type === 'GET_STATE') {
+      if (msg.type === 'GET_STATE') {
         response = this.orchestrator.getState();
       } else {
         response = await this.messageRouter.handle(message, connection.port.sender!);

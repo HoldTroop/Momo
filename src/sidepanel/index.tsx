@@ -166,7 +166,16 @@ function App() {
         });
         break;
       case 'LLM_STREAM_CHUNK':
-        appendToLastMessage(msg.payload.content);
+        appendToStream(msg.payload.content);
+        break;
+      case 'BRIDGE_EVENT':
+        if (msg.payload?.event === 'llm_stream_chunk') {
+          const chunk = msg.payload.data?.chunk;
+          const text = typeof chunk === 'string' ? chunk : chunk?.delta ?? chunk?.text ?? '';
+          if (text) appendToStream(text);
+        } else if (msg.payload?.event === 'llm_stream_end') {
+          finalizeStream();
+        }
         break;
     }
   };
@@ -181,6 +190,9 @@ function App() {
       console.error('Failed to load sessions:', e);
     }
   };
+
+  handlePortMessageRef.current = handlePortMessage;
+  loadSessionsRef.current = loadSessions;
 
   const sendToSw = (type: string, payload: any) => {
     if (portRef.current) {
@@ -213,16 +225,23 @@ function App() {
     });
   };
 
-  const appendToLastMessage = (text: string) => {
-    setMessages(prev => {
-      const idx = prev.findLastIndex(m => m.role === 'agent');
-      if (idx === -1) return prev;
-      const updated = [...prev];
-      const current = updated[idx];
-      if (!current) return prev;
-      updated[idx] = { ...current, content: current.content + text };
-      return updated;
-    });
+  const appendToStream = (text: string) => {
+    if (streamMessageId) {
+      setMessages(prev => prev.map(m => m.id === streamMessageId ? { ...m, content: m.content + text } : m));
+    } else {
+      const newMessage: Message = {
+        id: crypto.randomUUID(),
+        role: 'agent',
+        content: text,
+        timestamp: Date.now(),
+      };
+      setStreamMessageId(newMessage.id);
+      setMessages(prev => [...prev, newMessage]);
+    }
+  };
+
+  const finalizeStream = () => {
+    setStreamMessageId(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -238,6 +257,7 @@ function App() {
     if (!sessionId) {
       // Start new task
       sendToSw('START_TASK', { goal: userInput });
+      addMessage({ role: 'agent', content: '▶ Task started — this build has no local planner; drive it via MCP tools, or press Stop.' });
     } else {
       // Continue existing task (not fully implemented)
       sendToSw('EXECUTE_TOOL', { name: 'observe', arguments: {} });
@@ -254,17 +274,32 @@ function App() {
     setHumanIntervention(null);
   };
 
+  const handleStopTask = () => {
+    if (portRef.current) {
+      portRef.current.postMessage({ type: 'STOP_TASK', payload: {} });
+    } else {
+      chrome.runtime.sendMessage({ type: 'STOP_TASK', payload: {} }).catch(() => {});
+    }
+  };
+
   const handleNewTask = () => {
+    if (portRef.current) {
+      portRef.current.postMessage({ type: 'STOP_TASK', payload: {} });
+    } else {
+      chrome.runtime.sendMessage({ type: 'STOP_TASK', payload: {} }).catch(() => {});
+    }
     setSessionId(null);
     setMessages([]);
+    setIsLoading(false);
+    setHumanIntervention(null);
     setAgentState({ sessionId: null, goal: '', plan: null, currentStep: 0, history: [], isRunning: false });
   };
 
   const handleSessionClick = (session: Session) => {
+    portRef.current?.postMessage({ type: 'RESUME_TASK', payload: { sessionId: session.sessionId } });
     setSessionId(session.sessionId);
-    // Load session messages (simplified)
-    setMessages([{ id: '1', role: 'agent', content: `Resumed session: ${session.goal}`, timestamp: session.createdAt }]);
     setShowSessions(false);
+    addMessage({ role: 'agent', content: `Resuming session ${session.sessionId}...` });
   };
 
   return (
@@ -282,7 +317,7 @@ function App() {
         </button>
       </header>
 
-      <div className="chat-area" ref={messagesEndRef}>
+      <div className="chat-area" ref={chatAreaRef}>
         {agentState.plan && agentState.plan.length > 0 && (
           <div className="plan-view">
             <div style={{ fontWeight: 600, marginBottom: '8px' }}>📋 Plan ({agentState.currentStep + 1}/{agentState.plan.length})</div>

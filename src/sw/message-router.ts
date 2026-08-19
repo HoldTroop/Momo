@@ -66,7 +66,7 @@ export class MessageRouter {
 
   private handleBridgeEvent(event: BridgeEvent) {
     // Forward async events (policy_changed, audit_log_append, etc.) to side panel
-    chrome.runtime.sendMessage({ type: 'BRIDGE_EVENT', payload: event });
+    void chrome.runtime.sendMessage({ type: 'BRIDGE_EVENT', payload: event }).catch(() => {});
   }
 
   /** Dispatch a bridge → extension command and reply with a `CommandResult`.
@@ -257,7 +257,7 @@ export class MessageRouter {
   /**
    * Reject messages from untrusted senders before dispatching to a privileged
    * handler. `sender` is undefined when a message is routed via a trusted
-   * extension port (side panel / offscreen), which PortManager only accepts for
+   * extension port (side panel), which PortManager only accepts for
    * self-origin, non-tab connections.
    */
   private assertSenderAllowed(type: string, sender: chrome.runtime.MessageSender | undefined): void {
