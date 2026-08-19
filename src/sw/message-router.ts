@@ -1,7 +1,7 @@
 import { AgentOrchestrator, HumanResponse, BridgeEvent, BridgeCommand } from './orchestrator.js';
 import { cdpAdapter } from './cdp-adapter.js';
+import { redactText } from '../lib/redaction.js';
 import { getWsClient, initWsClient } from './ws-client.js';
-import { discoverBridgeUrl } from './bridge-port.js';
 
 export class MessageRouter {
   private orchestrator: AgentOrchestrator;
@@ -120,7 +120,7 @@ export class MessageRouter {
       }
       return p.tab_id;
     }
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     const id = tabs[0]?.id;
     if (!id) throw new Error('No active tab');
     return id;
@@ -210,10 +210,13 @@ export class MessageRouter {
 
     // Bridge requests via WebSocket (replaces native-messaging proxy)
     this.handlers.set('BRIDGE_REQUEST', this.handleBridgeRequest.bind(this));
-    this.handlers.set('OFFSCREEN_KILLED', this.handleOffscreenKilled.bind(this));
   }
 
   async handle(message: unknown, sender: chrome.runtime.MessageSender | undefined): Promise<unknown> {
+    if (typeof sender?.origin === 'string') {
+      return { error: 'Untrusted sender' };
+    }
+
     const msg = message as { type: string; payload?: unknown };
     const handler = this.handlers.get(msg.type);
 

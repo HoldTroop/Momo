@@ -47,53 +47,96 @@ function App() {
     isRunning: false,
   });
   const [showSessions, setShowSessions] = useState(false);
+  const [bridgeToken, setBridgeToken] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
   const [humanIntervention, setHumanIntervention] = useState<{ stepId: string; question: string; actionHash: string; pageRevision: number; origin: string; action: string; target: string; reversible: boolean; riskClass: string } | null>(null);
+  const [streamMessageId, setStreamMessageId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatAreaRef = useRef<HTMLDivElement>(null);
   const portRef = useRef<chrome.runtime.Port | null>(null);
+  const handlePortMessageRef = useRef<(msg: any) => void>(() => {});
+  const loadSessionsRef = useRef<() => void>(() => {});
+  const runtimeListener = useRef((msg: any) => {
+    handlePortMessageRef.current(msg);
+  }).current;
 
   useEffect(() => {
-    // Connect to service worker
-    const port = chrome.runtime.connect({ name: 'sidepanel' });
-    portRef.current = port;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let reconnectAttempts = 0;
+    let unmounted = false;
 
-    port.onMessage.addListener((msg) => {
-      handlePortMessage(msg);
-    });
+    const connectPort = () => {
+      const port = chrome.runtime.connect({ name: 'sidepanel' });
+      portRef.current = port;
 
-    port.onDisconnect.addListener(() => {
-      console.log('[SidePanel] Disconnected from SW');
-      setTimeout(() => window.location.reload(), 3000);
-    });
+      port.onMessage.addListener((msg) => {
+        reconnectAttempts = 0;
+        handlePortMessageRef.current(msg);
+      });
+
+      port.onDisconnect.addListener(() => {
+        console.log('[SidePanel] Disconnected from SW');
+        if (unmounted) return;
+        reconnectAttempts += 1;
+        if (reconnectAttempts >= 3) {
+          window.location.reload();
+          return;
+        }
+        portRef.current = null;
+        reconnectTimer = setTimeout(connectPort, 2000);
+      });
+    };
+
+    connectPort();
 
     // The service worker broadcasts lifecycle and confirmation events via
     // chrome.runtime.sendMessage (not the port), so listen there too.
-    chrome.runtime.onMessage.addListener(handlePortMessage);
+    chrome.runtime.onMessage.addListener(runtimeListener);
 
     // Load sessions
-    loadSessions();
+    loadSessionsRef.current();
 
     return () => {
-      chrome.runtime.onMessage.removeListener(handlePortMessage);
-      port.disconnect();
+      unmounted = true;
+      chrome.runtime.onMessage.removeListener(runtimeListener);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      portRef.current?.disconnect();
     };
   }, []);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    chrome.storage.local.get('bridgeToken').then((v) => { if (typeof v?.bridgeToken === 'string') setBridgeToken(v.bridgeToken); }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const el = chatAreaRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
   const handlePortMessage = (msg: any) => {
+    if (msg.type === 'EVENT') { handlePortMessage(msg.payload); return; }
+    if (msg.type === 'RESPONSE') {
+      const p = msg.payload;
+      if (p?.error) { setIsLoading(false); addMessage({ role: 'agent', content: `❌ Error: ${p.error}` }); return; }
+      if (p && typeof p === 'object') { handlePortMessage(p); return; }
+      return;
+    }
+
     switch (msg.type) {
       case 'STATE_UPDATE':
-        setAgentState(msg.payload);
+        if (msg.payload?.state) {
+          setAgentState(prev => ({ ...prev, ...msg.payload.state, isRunning: msg.payload.state.isRunning ?? prev.isRunning }));
+        }
         break;
       case 'TASK_STARTED':
-        addMessage({ role: 'agent', content: `Starting task: ${msg.payload.goal}` });
+        setIsLoading(false);
+        addMessage({ role: 'agent', content: `▶ Task started: ${msg.payload.goal}` });
         break;
       case 'PLAN_CREATED':
         setAgentState(prev => ({ ...prev, plan: msg.payload.plan, currentStep: 0 }));
         break;
       case 'STEP_STARTED':
+        setIsLoading(false);
         setAgentState(prev => ({ ...prev, currentStep: msg.payload.stepIndex }));
         addMessage({ role: 'agent', content: `Step ${msg.payload.stepIndex + 1}: ${msg.payload.action.name}`, toolCalls: [msg.payload.action] });
         break;
@@ -337,8 +380,48 @@ function App() {
           <button className="btn primary" type="submit" disabled={isLoading || !input.trim()}>
             {isLoading ? 'Running...' : 'Send'}
           </button>
+          <button
+            className="btn danger"
+            type="button"
+            onClick={handleStopTask}
+            disabled={!isLoading && !agentState.isRunning}
+          >
+            Stop
+          </button>
         </div>
       </form>
+
+      <div style={{ padding: '0 16px 12px' }}>
+        <button className="btn secondary" onClick={() => setShowSettings(!showSettings)} style={{ padding: '6px 12px', fontSize: '12px' }}>
+          Bridge settings
+        </button>
+        {showSettings && (
+          <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <input
+              type="password"
+              className="input-field"
+              style={{ minHeight: 'auto', maxHeight: 'none' }}
+              value={bridgeToken}
+              onChange={(e) => setBridgeToken(e.target.value)}
+              placeholder="Bridge auth token"
+            />
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <button
+                className="btn primary"
+                style={{ padding: '6px 12px', fontSize: '12px' }}
+                onClick={() => {
+                  chrome.storage.local.set({ bridgeToken: bridgeToken.trim() }).catch((e) => console.error('Failed to save bridge token:', e));
+                }}
+              >
+                Save token
+              </button>
+              <span style={{ fontSize: '11px', color: '#8b949e' }}>
+                Paste the token from ~/.momo/auth_token (printed by the bridge on first start).
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
 
       {showSessions && sessions.length > 0 && (
         <div className="session-list">

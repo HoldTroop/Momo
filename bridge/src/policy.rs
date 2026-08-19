@@ -303,16 +303,23 @@ impl PolicyEngine {
         // URL; every other action is gated on the current page origin. An empty
         // allowlist denies everything (fail closed).
         if request.action == "navigate" {
-            if let Some(url) = request.arguments.get("url").and_then(|v| v.as_str()) {
-                if !self.check_origin(url) {
-                    return Ok(PolicyDecision {
-                        allowed: false,
-                        requires_confirmation: false,
-                        reason: Some(format!("Origin not on allowlist: {}", url)),
-                        risk_class: RiskClass::Navigation,
-                        confirmation_data: None,
-                    });
-                }
+            let url = request.arguments.get("url").and_then(|v| v.as_str());
+            match url {
+                None => return Ok(PolicyDecision {
+                    allowed: false,
+                    requires_confirmation: false,
+                    reason: Some("navigate requires a string 'url' argument".to_string()),
+                    risk_class: RiskClass::Navigation,
+                    confirmation_data: None,
+                }),
+                Some(u) if !self.check_origin(u) => return Ok(PolicyDecision {
+                    allowed: false,
+                    requires_confirmation: false,
+                    reason: Some(format!("Origin not on allowlist: {}", u)),
+                    risk_class: RiskClass::Navigation,
+                    confirmation_data: None,
+                }),
+                Some(_) => {}
             }
         } else if !self.check_origin(&request.origin) {
             return Ok(PolicyDecision {

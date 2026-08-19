@@ -139,13 +139,112 @@ pub async fn handle_tools_call(
         .and_then(|v| v.as_str())
         .ok_or((-32602, "Invalid params: missing tool name".to_string()))?;
 
-    let arguments = obj.get("arguments").cloned().unwrap_or_else(|| json!({}));
+    let arguments = match obj.get("arguments") {
+        Some(v) if v.is_object() => v.clone(),
+        Some(_) => return Err((-32602, "arguments must be an object".to_string())),
+        None => json!({}),
+    };
 
     if !is_known_tool(name) {
         return Err((-32602, format!("Unknown tool: {name}")));
     }
 
+    if let Err(msg) = validate_arguments(name, &arguments) {
+        return Err((-32602, msg));
+    }
+
+    // M2: bridge-side PolicyCheck for execute_action — the MCP call itself must
+    // pass the policy engine BEFORE the Command is dispatched to the extension.
+    check_execute_action_policy(cm, name, &arguments).await?;
+
     Ok(dispatch_tool_call(cm, name, arguments).await)
+}
+
+/// Bridge-side PolicyCheck for `execute_action` (M2). Denial (including the
+/// `--mcp` deny-by-default mode with an empty `permitted_actions`, or an
+/// authorize error) surfaces as a JSON-RPC -32603 carrying the engine's reason.
+async fn check_execute_action_policy(
+    cm: &ConnectionManager,
+    name: &str,
+    arguments: &Value,
+) -> Result<(), (i64, String)> {
+    if name != "execute_action" {
+        return Ok(());
+    }
+    // `action` is validated by validate_arguments; the remaining fields are
+    // best-effort with the defaults from the enumerated contract.
+    let action = arguments.get("action").and_then(Value::as_str).unwrap_or_default();
+    let origin = arguments
+        .get("origin")
+        .and_then(Value::as_str)
+        .unwrap_or("mcp://local");
+    let target = arguments
+        .get("ref")
+        .or_else(|| arguments.get("url"))
+        .or_else(|| arguments.get("text"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+
+    let request = crate::policy::PolicyRequest {
+        session_id: "mcp".to_string(),
+        action: action.to_string(),
+        origin: origin.to_string(),
+        target: target.to_string(),
+        arguments: arguments.clone(),
+        page_revision: 0,
+    };
+
+    let auth = cm
+        .bridge_server()
+        .authorize(request)
+        .await
+        .map_err(|e| (-32603, format!("policy denied: {e}")))?;
+    let decision = &auth["decision"];
+    if decision.get("allowed").and_then(Value::as_bool) != Some(true) {
+        let reason = decision
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        return Err((-32603, format!("policy denied: {reason}")));
+    }
+    if decision.get("requires_confirmation").and_then(Value::as_bool) == Some(true) {
+        return Err((-32603, "policy requires human confirmation".to_string()));
+    }
+    Ok(())
+}
+
+/// Validate `tools/call` arguments before dispatch. Only `execute_action` has
+/// per-action required fields; the other three tools accept any object.
+pub fn validate_arguments(name: &str, arguments: &Value) -> Result<(), String> {
+    if name != "execute_action" {
+        return Ok(());
+    }
+    let action = match arguments.get("action").and_then(|v| v.as_str()) {
+        Some(a) => a,
+        None => return Err("unknown action".to_string()),
+    };
+    match action {
+        "navigate" => {
+            if arguments.get("url").and_then(|v| v.as_str()).is_none() {
+                return Err("execute_action navigate requires a string 'url' argument".to_string());
+            }
+        }
+        "click" | "scroll" => {
+            if arguments.get("ref").and_then(|v| v.as_str()).is_none() {
+                return Err(format!("execute_action {action} requires a string 'ref' argument"));
+            }
+        }
+        "type" => {
+            if arguments.get("ref").and_then(|v| v.as_str()).is_none() {
+                return Err("execute_action type requires a string 'ref' argument".to_string());
+            }
+            if arguments.get("text").and_then(|v| v.as_str()).is_none() {
+                return Err("execute_action type requires a string 'text' argument".to_string());
+            }
+        }
+        other => return Err(format!("unknown action: {other}")),
+    }
+    Ok(())
 }
 
 /// Translate a tool call into a bridge→extension Command round-trip and map the
@@ -283,6 +382,53 @@ mod tests {
         let text = out["content"][0]["text"].as_str().unwrap();
         let embedded: Value = serde_json::from_str(text).unwrap();
         assert_eq!(embedded["error"], "Missing ref for click");
+    }
+
+    #[test]
+    fn validate_arguments_navigate_without_url_is_err() {
+        let err = validate_arguments("execute_action", &json!({ "action": "navigate" }))
+            .expect_err("navigate without url must fail");
+        assert_eq!(err, "execute_action navigate requires a string 'url' argument");
+        // Non-string url is also rejected.
+        assert!(validate_arguments("execute_action", &json!({ "action": "navigate", "url": 42 })).is_err());
+    }
+
+    #[test]
+    fn validate_arguments_click_without_ref_is_err() {
+        let err = validate_arguments("execute_action", &json!({ "action": "click" }))
+            .expect_err("click without ref must fail");
+        assert_eq!(err, "execute_action click requires a string 'ref' argument");
+        let err = validate_arguments("execute_action", &json!({ "action": "scroll", "ref": 7 }))
+            .expect_err("scroll with non-string ref must fail");
+        assert_eq!(err, "execute_action scroll requires a string 'ref' argument");
+    }
+
+    #[test]
+    fn validate_arguments_type_requires_ref_and_text() {
+        assert!(validate_arguments("execute_action", &json!({ "action": "type", "text": "hi" })).is_err());
+        assert!(validate_arguments("execute_action", &json!({ "action": "type", "ref": "el_1" })).is_err());
+        assert!(validate_arguments(
+            "execute_action",
+            &json!({ "action": "type", "ref": "el_1", "text": "hi" })
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn validate_arguments_valid_navigate_is_ok_and_unknown_action_is_err() {
+        assert!(validate_arguments(
+            "execute_action",
+            &json!({ "action": "navigate", "url": "https://example.com" })
+        )
+        .is_ok());
+        let err = validate_arguments("execute_action", &json!({ "action": "hover" }))
+            .expect_err("unknown action must fail");
+        assert_eq!(err, "unknown action: hover");
+        // The other three tools have no required args.
+        for tool in ["read_page_content", "get_interactive_elements", "list_tabs"] {
+            assert!(validate_arguments(tool, &json!({})).is_ok());
+            assert!(validate_arguments(tool, &json!({ "anything": true })).is_ok());
+        }
     }
 
     #[test]

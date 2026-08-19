@@ -6,11 +6,10 @@ use anyhow::Result;
 use axum::{routing::get, Router};
 use dirs;
 use md5::{Digest, Md5};
-use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
-use tower_http::cors::CorsLayer;
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 mod llm;
 mod mcp_stdio;
@@ -47,6 +46,7 @@ enum BridgeRequest {
     Extract { session_id: String, origin: String, selector: String, schema: serde_json::Value, include_markdown: bool, page_revision: u64 },
 
     // Bridge Management
+    Auth { token: String },
     Ping,
     GetStatus,
     Shutdown,
@@ -75,7 +75,7 @@ enum BridgeResponse {
 struct BridgeServer {
     llm_gateway: Arc<LlmGateway>,
     policy_engine: Arc<PolicyEngine>,
-    request_id: Arc<RwLock<u64>>,
+    auth_token: String,
 }
 
 impl BridgeServer {
@@ -92,17 +92,25 @@ impl BridgeServer {
         // restart doesn't silently reset it to the fail-closed default.
         policy_engine.load_config()?;
 
+        let auth_token = std::env::var("MOMO_AUTH_TOKEN")
+            .ok()
+            .unwrap_or_else(load_or_create_token);
+
         Ok(Self {
             llm_gateway: Arc::new(LlmGateway::new()?),
             policy_engine,
-            request_id: Arc::new(RwLock::new(0)),
+            auth_token,
         })
     }
 
     fn next_request_id(&self) -> String {
-        let mut id = self.request_id.write();
-        *id += 1;
-        format!("req-{}", *id)
+        Uuid::new_v4().to_string()
+    }
+
+    /// The bearer token the extension must present in an `Auth` frame before
+    /// any other request is dispatched (C6).
+    pub fn auth_token(&self) -> String {
+        self.auth_token.clone()
     }
 
     /// Evaluate the policy engine for an action and write the audit entry.
@@ -113,45 +121,79 @@ impl BridgeServer {
     /// extension later reports the real outcome via `ActionResult`, which calls
     /// `update_audit_outcome` to correct the entry (MOMO-056). Returns both the
     /// decision and the `action_hash` so the caller can correlate the follow-up.
-    fn authorize(&self, request: PolicyRequest) -> Result<serde_json::Value> {
-        let decision = self.policy_engine.evaluate(&request)?;
+    ///
+    /// `pub(crate)` so mcp_tools can run a bridge-side PolicyCheck for
+    /// `execute_action`; the rusqlite-touching parts (evaluate + log_audit)
+    /// run on a `spawn_blocking` thread so blocking DB I/O never stalls a
+    /// tokio worker.
+    pub(crate) async fn authorize(&self, request: PolicyRequest) -> Result<serde_json::Value> {
+        // Hash and audit-entry shaping are CPU-only and stay async-side; the
+        // DB-touching evaluate/log_audit pair runs inside spawn_blocking.
         let action_hash = format!("{:x}", Md5::digest(serde_json::to_string(&request)?.as_bytes()));
+        let entry_hash = action_hash.clone();
+        let policy_engine = self.policy_engine.clone();
 
-        let outcome = if !decision.allowed {
-            policy::AuditOutcome::Denied
-        } else if decision.requires_confirmation {
-            policy::AuditOutcome::Escalated
-        } else {
-            policy::AuditOutcome::Pending
-        };
+        let decision = tokio::task::spawn_blocking(move || {
+            let decision = policy_engine.evaluate(&request)?;
 
-        let audit_entry = policy::AuditEntry {
-            id: 0, // assigned by the DB
-            timestamp: chrono::Utc::now(),
-            session_id: request.session_id.clone(),
-            action: request.action.clone(),
-            origin: request.origin.clone(),
-            target: request.target.clone(),
-            arguments: request.arguments.clone(),
-            risk_class: decision.risk_class.clone(),
-            outcome,
-            action_hash: action_hash.clone(),
-            page_revision: request.page_revision,
-            user_confirmed: false,
-            error: decision.reason.clone(),
-        };
+            let outcome = if !decision.allowed {
+                policy::AuditOutcome::Denied
+            } else if decision.requires_confirmation {
+                policy::AuditOutcome::Escalated
+            } else {
+                policy::AuditOutcome::Pending
+            };
 
-        let _ = self.policy_engine.log_audit(&audit_entry);
+            let audit_entry = policy::AuditEntry {
+                id: 0, // assigned by the DB
+                timestamp: chrono::Utc::now(),
+                session_id: request.session_id.clone(),
+                action: request.action.clone(),
+                origin: request.origin.clone(),
+                target: request.target.clone(),
+                arguments: request.arguments.clone(),
+                risk_class: decision.risk_class.clone(),
+                outcome,
+                action_hash: entry_hash,
+                page_revision: request.page_revision,
+                user_confirmed: false,
+                error: decision.reason.clone(),
+            };
+
+            policy_engine
+                .log_audit(&audit_entry)
+                .map_err(|e| anyhow::anyhow!("Failed to write audit log: {}", e))?;
+            Ok::<_, anyhow::Error>(decision)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Policy evaluation task failed: {}", e))??;
+
         Ok(serde_json::json!({
             "decision": decision,
             "action_hash": action_hash,
         }))
     }
 
+    /// Accessor so mcp_tools (and tests) can reach the policy engine, e.g. to
+    /// flip mcp_mode or run a bridge-side PolicyCheck.
+    pub(crate) fn policy_engine(&self) -> Arc<PolicyEngine> {
+        self.policy_engine.clone()
+    }
+
     async fn handle_request(&self, request: BridgeRequest, client_id: Option<String>) -> Result<BridgeResponse> {
         let request_id = client_id.unwrap_or_else(|| self.next_request_id());
 
         match request {
+            // AUTH is consumed by the connection manager while a connection is
+            // unauthenticated; reaching this arm means the connection is already
+            // authenticated, so re-auth is an idempotent success.
+            BridgeRequest::Auth { .. } => {
+                Ok(BridgeResponse::Ok {
+                    request_id,
+                    data: serde_json::json!({ "status": "auth_ok" }),
+                })
+            }
+
             BridgeRequest::Ping => {
                 Ok(BridgeResponse::Ok {
                     request_id,
@@ -177,7 +219,7 @@ impl BridgeServer {
                     target,
                     arguments: serde_json::json!({ "x": x, "y": y }),
                     page_revision,
-                })?;
+                }).await?;
                 Ok(BridgeResponse::Ok { request_id, data })
             }
 
@@ -197,7 +239,7 @@ impl BridgeServer {
                         "field_is_sensitive": field_is_sensitive,
                     }),
                     page_revision,
-                })?;
+                }).await?;
                 Ok(BridgeResponse::Ok { request_id, data })
             }
 
@@ -209,7 +251,7 @@ impl BridgeServer {
                     target,
                     arguments: serde_json::json!({ "x": x, "y": y, "delta_x": delta_x, "delta_y": delta_y }),
                     page_revision,
-                })?;
+                }).await?;
                 Ok(BridgeResponse::Ok { request_id, data })
             }
 
@@ -221,12 +263,12 @@ impl BridgeServer {
                     target,
                     arguments: serde_json::json!({ "from_x": from_x, "from_y": from_y, "to_x": to_x, "to_y": to_y }),
                     page_revision,
-                })?;
+                }).await?;
                 Ok(BridgeResponse::Ok { request_id, data })
             }
 
             BridgeRequest::PolicyCheck { session_id, action, origin, target, arguments, page_revision } => {
-                let data = self.authorize(PolicyRequest { session_id, action, origin, target, arguments, page_revision })?;
+                let data = self.authorize(PolicyRequest { session_id, action, origin, target, arguments, page_revision }).await?;
                 Ok(BridgeResponse::Ok { request_id, data })
             }
 
@@ -237,7 +279,12 @@ impl BridgeServer {
                     // malformed report can't inflate the audit log's success count.
                     _ => policy::AuditOutcome::Failed,
                 };
-                let updated = self.policy_engine.update_audit_outcome(&session_id, &action_hash, parsed, error)?;
+                let policy_engine = self.policy_engine.clone();
+                let updated = tokio::task::spawn_blocking(move || {
+                    policy_engine.update_audit_outcome(&session_id, &action_hash, parsed, error)
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("Audit outcome update task failed: {}", e))??;
                 Ok(BridgeResponse::Ok {
                     request_id,
                     data: serde_json::json!({ "updated": updated }),
@@ -253,7 +300,10 @@ impl BridgeServer {
             }
 
             BridgeRequest::PolicySetConfig { config } => {
-                self.policy_engine.save_config(&config)?;
+                let policy_engine = self.policy_engine.clone();
+                tokio::task::spawn_blocking(move || policy_engine.save_config(&config))
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Config save task failed: {}", e))??;
                 Ok(BridgeResponse::Ok {
                     request_id,
                     data: serde_json::json!({ "saved": true }),
@@ -261,7 +311,13 @@ impl BridgeServer {
             }
 
             BridgeRequest::PolicyGetAuditLog { session_id, limit } => {
-                let entries = self.policy_engine.get_audit_log(session_id.as_deref(), limit)?;
+                let limit = limit.min(1000);
+                let policy_engine = self.policy_engine.clone();
+                let entries = tokio::task::spawn_blocking(move || {
+                    policy_engine.get_audit_log(session_id.as_deref(), limit)
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("Audit log query task failed: {}", e))??;
                 Ok(BridgeResponse::Ok {
                     request_id,
                     data: serde_json::to_value(entries)?,
@@ -315,6 +371,38 @@ impl BridgeServer {
     }
 }
 
+/// Load the bridge auth token from `~/.momo/auth_token`, creating it (0600 on
+/// Unix) on first run. The token itself is never logged; only the file path is.
+fn load_or_create_token() -> String {
+    let path = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".momo")
+        .join("auth_token");
+
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        let trimmed = existing.trim().to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+
+    let token = Uuid::new_v4().to_string();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    if let Ok(mut file) = std::fs::File::create(&path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+        }
+        use std::io::Write;
+        let _ = file.write_all(token.as_bytes());
+    }
+    info!("Generated bridge auth token; extension side panel needs it (file: {:?})", path);
+    token
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -332,6 +420,10 @@ async fn main() -> Result<()> {
     // BridgeServer (and its PolicyEngine) is constructed identically in every
     // mode; the mode only changes what drives it (PHASE9 §3.1).
     let server = Arc::new(BridgeServer::new()?);
+    if mcp_mode {
+        server.policy_engine().set_mcp_mode(true);
+        info!("MCP mode: execute_action deny-by-default until permitted_actions is configured");
+    }
     let connection_manager = Arc::new(ConnectionManager::new(server.clone()));
 
     if mcp_mode {
@@ -370,8 +462,7 @@ async fn start_ws_listener(
 ) -> Result<(u16, tokio::task::JoinHandle<()>)> {
     let app = Router::new()
         .merge(ws_router(connection_manager.clone()))
-        .route("/health", get(|| async { "ok" }))
-        .layer(CorsLayer::permissive());
+        .route("/health", get(|| async { "ok" }));
 
     // Bind a fixed port in 9090-9100. The MV3 extension cannot read files or
     // env vars, so it discovers the bridge by scanning this range; an ephemeral
@@ -450,7 +541,24 @@ async fn run_mcp_mode(
 async fn run_legacy_stdio(server: Arc<BridgeServer>) -> Result<()> {
     let stdin = io::stdin();
     let mut reader = BufReader::new(stdin.lock());
-    let mut stdout = io::stdout();
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+
+    // Write one native-messaging frame: 4-byte LE length prefix + JSON body.
+    // Returns Ok(()) once the frame is flushed, Err(..) if serialization or
+    // the write failed.
+    let mut send = |response: &BridgeResponse| -> io::Result<()> {
+        let bytes = serde_json::to_vec(response).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("failed to serialize response: {}", e),
+            )
+        })?;
+        let len_bytes = (bytes.len() as u32).to_le_bytes();
+        out.write_all(&len_bytes)?;
+        out.write_all(&bytes)?;
+        out.flush()
+    };
 
     let mut length_buf = [0u8; 4];
 
@@ -462,8 +570,35 @@ async fn run_legacy_stdio(server: Arc<BridgeServer>) -> Result<()> {
 
         let length = u32::from_le_bytes(length_buf) as usize;
         if length > 10_000_000 {
-            warn!("Message too large: {} bytes", length);
-            break;
+            warn!("Message too large: {} bytes; replying with error and draining", length);
+            let err_resp = BridgeResponse::Error {
+                request_id: Uuid::new_v4().to_string(),
+                code: -32600,
+                message: "Message too large".to_string(),
+            };
+            if send(&err_resp).is_err() {
+                error!("Failed to write oversize error response");
+                break;
+            }
+            // Drain the declared byte count so the stream stays aligned; the
+            // discard buffer is capped at the same 10 MB limit so a bogus
+            // length header cannot force a huge allocation.
+            let mut remaining = length;
+            let mut sink = vec![0u8; remaining.min(10_000_000)];
+            let mut drained = true;
+            while remaining > 0 {
+                let want = remaining.min(sink.len());
+                if reader.read_exact(&mut sink[..want]).is_err() {
+                    error!("Failed to drain oversized message; stream broken");
+                    drained = false;
+                    break;
+                }
+                remaining -= want;
+            }
+            if !drained {
+                break;
+            }
+            continue;
         }
 
         let mut msg_buf = vec![0u8; length];
@@ -476,32 +611,44 @@ async fn run_legacy_stdio(server: Arc<BridgeServer>) -> Result<()> {
             Ok(req) => req,
             Err(e) => {
                 error!("Failed to parse request: {}", e);
+                // Reply so the client doesn't hang waiting for a response
+                // (the request_id is unrecoverable from malformed JSON).
+                let err_resp = BridgeResponse::Error {
+                    request_id: Uuid::new_v4().to_string(),
+                    code: -32700,
+                    message: format!("Failed to parse request: {}", e),
+                };
+                if send(&err_resp).is_err() {
+                    error!("Failed to write parse error response");
+                    break;
+                }
                 continue;
             }
         };
 
         let response = server.handle_request(request, None).await.unwrap_or_else(|e| {
             BridgeResponse::Error {
-                request_id: "unknown".to_string(),
+                request_id: Uuid::new_v4().to_string(),
                 code: -1,
-                message: e.to_string()
+                message: e.to_string(),
             }
         });
 
-        let response_bytes = match serde_json::to_vec(&response) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                error!("Failed to serialize response: {}", e);
-                continue;
+        if let Err(e) = send(&response) {
+            // Serialization failure must still produce a reply so the client
+            // doesn't hang; a write failure means the stream is broken.
+            error!("Response send failed: {}", e);
+            let err_resp = BridgeResponse::Error {
+                request_id: Uuid::new_v4().to_string(),
+                code: -1,
+                message: e.to_string(),
+            };
+            if send(&err_resp).is_err() {
+                error!("Failed to write serialization error response");
+                break;
             }
-        };
-
-        let len_bytes = (response_bytes.len() as u32).to_le_bytes();
-        if stdout.write_all(&len_bytes).is_err() || stdout.write_all(&response_bytes).is_err() {
-            error!("Failed to write response");
-            break;
+            continue;
         }
-        stdout.flush().ok();
     }
 
     Ok(())

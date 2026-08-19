@@ -47,11 +47,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
+// Manifest `externally_connectable` allows localhost pages to reach us; nothing
+// from outside the extension is trusted, so reject every external message.
+chrome.runtime.onMessageExternal.addListener((_message, _sender, sendResponse) => {
+  sendResponse({ error: 'External messages are not accepted' });
+  return false;
+});
+
 chrome.runtime.onConnect.addListener((port) => {
   portManager.handlePort(port);
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'agent-init-retry') {
+    void initialize();
+    return;
+  }
   alarmManager.handleAlarm(alarm).catch((err) => {
     console.error('[SW] Alarm handler failed:', err);
   });

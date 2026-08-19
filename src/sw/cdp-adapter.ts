@@ -28,6 +28,7 @@ declare namespace chrome.debugger {
     title?: string;
     url?: string;
     type?: string;
+    tabId?: number;
     attached?: boolean;
   }
   interface Debuggee {
@@ -41,6 +42,7 @@ export interface CdpTarget {
   title: string;
   url: string;
   type: string;
+  tabId?: number;
   attached: boolean;
 }
 
@@ -57,7 +59,7 @@ export interface CdpSession {
 class CdpAdapter {
   private sessions: Map<string, CdpSession> = new Map();
   private targetListeners: Map<string, (targetInfo: chrome.debugger.TargetInfo) => void> = new Map();
-  private eventListeners: Map<string, Set<(method: string, params: any) => void>> = new Map();
+  private eventListeners: Map<string /*sessionId*/, Map<string /*method*/, Set<(method: string, params: any) => void>>> = new Map();
   private sessionDetachedCallbacks: Set<(sessionId: string) => void> = new Set();
 
   async getTargets(): Promise<CdpTarget[]> {
@@ -72,6 +74,7 @@ class CdpAdapter {
           title: t.title || '',
           url: t.url || '',
           type: t.type || '',
+          tabId: t.tabId,
           attached: t.attached || false,
         }));
         resolve(result);
@@ -93,10 +96,7 @@ class CdpAdapter {
           sessionId,
           targetId,
           onEvent: (method, params) => {
-            const listeners = this.eventListeners.get(method);
-            if (listeners) {
-              listeners.forEach(cb => cb(method, params));
-            }
+            this.eventListeners.get(sessionId)?.get(method)?.forEach(cb => cb(method, params));
           },
           onDetach: (reason) => {
             // Remove the per-session listeners so they don't leak (or double-fire
@@ -164,6 +164,7 @@ class CdpAdapter {
     if (session._detachListener) {
       chrome.debugger.onDetach.removeListener(session._detachListener);
     }
+    this.eventListeners.delete(session.sessionId);
   }
 
   async sendCommand<T = any>(sessionId: string, domain: string, command: string, params: any = {}): Promise<T> {
@@ -188,14 +189,29 @@ class CdpAdapter {
     });
   }
 
-  onEvent(method: string, callback: (method: string, params: any) => void): () => void {
-    if (!this.eventListeners.has(method)) {
-      this.eventListeners.set(method, new Set());
+  onEvent(sessionId: string, method: string, callback: (method: string, params: any) => void): () => void {
+    let methodMap = this.eventListeners.get(sessionId);
+    if (!methodMap) {
+      methodMap = new Map();
+      this.eventListeners.set(sessionId, methodMap);
     }
-    this.eventListeners.get(method)!.add(callback);
+    let callbacks = methodMap.get(method);
+    if (!callbacks) {
+      callbacks = new Set();
+      methodMap.set(method, callbacks);
+    }
+    callbacks.add(callback);
 
     return () => {
-      this.eventListeners.get(method)?.delete(callback);
+      const current = this.eventListeners.get(sessionId)?.get(method);
+      if (!current) return;
+      current.delete(callback);
+      if (current.size === 0) {
+        this.eventListeners.get(sessionId)?.delete(method);
+      }
+      if (this.eventListeners.get(sessionId)?.size === 0) {
+        this.eventListeners.delete(sessionId);
+      }
     };
   }
 

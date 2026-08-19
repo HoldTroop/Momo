@@ -5,6 +5,11 @@
  * Replicates the exact frame shapes of the real `WsClient` (src/sw/ws-client.ts):
  *   - connects with `binaryType = 'arraybuffer'`
  *   - sends binary frames via `send(new TextEncoder().encode(JSON.stringify(obj)))`
+ *   - extension→bridge first frame is `{type:'AUTH',payload:{token}}`; bridge answers
+ *     `{type:'Ok',payload:{data:{status:'auth_ok'}}}` or an `Error` with request_id:'auth'
+ *     (the mock sends MOMO_AUTH_TOKEN (fallback: ~/.momo/auth_token); the spawned bridge
+ *     is deliberately stripped of MOMO_AUTH_TOKEN so it always expects the token from
+ *     ~/.momo/auth_token — this lets tests simulate a wrong token)
  *   - bridge→extension heartbeat is `{type:'Ok',payload:{data:{status:'ping'}}}` → ignored
  *   - extension→bridge application ping is `{type:'PING'}`; bridge answers `status:'pong'`
  *   - bridge→extension command is `{type:'Command',payload:{request_id,command,params}}`
@@ -31,7 +36,9 @@
 import { spawn } from 'node:child_process';
 import { readFileSync, existsSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
 import path from 'node:path';
+import WebSocket from 'ws';
 
 const MODE = process.argv[2] ?? 'roundtrip';
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -40,6 +47,18 @@ const PORT_FILE = process.env.PORT_FILE ?? '/tmp/momo_mcp_port.txt';
 
 const dbg = (...a) => console.error('[mock]', ...a);
 
+const TOKEN = process.env.MOMO_AUTH_TOKEN ?? (() => {
+  try {
+    return readFileSync(path.join(homedir(), '.momo', 'auth_token'), 'utf8').trim();
+  } catch {
+    return null;
+  }
+})();
+if (!TOKEN) {
+  dbg('No auth token found (set MOMO_AUTH_TOKEN or create ~/.momo/auth_token)');
+  process.exit(2);
+}
+
 const binFrame = (obj) => new TextEncoder().encode(JSON.stringify(obj));
 function decodeFrame(data) {
   if (typeof data === 'string') data = new TextEncoder().encode(data).buffer;
@@ -47,7 +66,9 @@ function decodeFrame(data) {
 }
 
 rmSync(PORT_FILE, { force: true });
-const child = spawn(BRIDGE_BIN, ['--mcp', '--port', PORT_FILE], { stdio: ['pipe', 'pipe', 'inherit'] });
+const childEnv = { ...process.env };
+delete childEnv.MOMO_AUTH_TOKEN;
+const child = spawn(BRIDGE_BIN, ['--mcp', '--port', PORT_FILE], { stdio: ['pipe', 'pipe', 'inherit'], env: childEnv });
 
 const port = await waitForPort();
 dbg('bridge listening on port', port);
@@ -57,14 +78,32 @@ ws.binaryType = 'arraybuffer';
 
 let finished = false;
 
+const watchdog = setTimeout(() => {
+  if (!finished) {
+    dbg('watchdog: no completion within 60s');
+    child.kill();
+    process.exit(1);
+  }
+}, 60_000);
+watchdog.unref?.();
+
 ws.onopen = () => {
-  dbg('WS connected; sending application PING to confirm registration');
-  ws.send(binFrame({ type: 'PING' }));
+  dbg('WS connected; sending AUTH frame');
+  ws.send(binFrame({ type: 'AUTH', payload: { token: TOKEN } }));
 };
 
 ws.onmessage = (event) => {
   const msg = decodeFrame(event.data);
 
+  if (msg.type === 'Ok' && msg.payload?.data?.status === 'auth_ok') {
+    dbg('authenticated');
+    ws.send(binFrame({ type: 'PING' }));
+    return;
+  }
+  if (msg.type === 'Error' && msg.payload?.request_id === 'auth') {
+    dbg('AUTH FAILED:', msg.payload.message);
+    process.exit(1);
+  }
   if (msg.type === 'Ok' && msg.payload?.data?.status === 'ping') return; // heartbeat
   if (msg.type === 'Ok' && msg.payload?.data?.status === 'pong') {
     dbg('PONG received — connection registered. Sending tools/call to stdin.');

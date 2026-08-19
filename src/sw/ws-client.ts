@@ -22,6 +22,8 @@ export class WsClient {
   private baseReconnectDelay = 1000;
   private maxReconnectDelay = 30000;
   private isClosing = false;
+  private authenticated = false;
+  private authFailed = false;
   /** Requests buffered while disconnected; flushed on reconnect (BUG 2). */
   private outbox: OutboxEntry[] = [];
   private onEventCallback: (evt: BridgeEvent) => void;
@@ -35,6 +37,8 @@ export class WsClient {
   async connect(): Promise<void> {
     this.isClosing = false;
     this.reconnectAttempts = 0;
+    this.authenticated = false;
+    this.authFailed = false;
     return this.tryConnect();
   }
 
@@ -45,6 +49,7 @@ export class WsClient {
    * (BUG 2).
    */
   private async tryConnect(): Promise<void> {
+    if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) return;
     try {
       this.url = await discoverBridgeUrl();
     } catch (e) {
@@ -58,37 +63,54 @@ export class WsClient {
   private doConnect(): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
-        this.ws = new WebSocket(this.url);
-        this.ws.binaryType = 'arraybuffer';
+        const ws = new WebSocket(this.url);
+        this.ws = ws;
+        ws.binaryType = 'arraybuffer';
 
-        this.ws.onopen = () => {
+        ws.onopen = () => {
           console.log('[WsClient] Connected to', this.url);
-          this.reconnectAttempts = 0;
-          this.startHeartbeat();
-          this.flushOutbox();
           resolve();
+          void this.performAuth();
         };
 
-        this.ws.onmessage = (event: MessageEvent) => {
+        ws.onmessage = (event: MessageEvent) => {
           this.handleMessage(event);
         };
 
-        this.ws.onclose = (event: CloseEvent) => {
+        ws.onclose = (event: CloseEvent) => {
+          if (this.ws !== ws) return;
           console.log('[WsClient] Disconnected:', event.code, event.reason);
           this.stopHeartbeat();
+          for (const [id, resolver] of this.pending) {
+            resolver(Promise.reject(new Error('WebSocket disconnected')));
+          }
+          this.pending.clear();
           if (!this.isClosing) {
             this.scheduleReconnect();
           }
         };
 
-        this.ws.onerror = (error: Event) => {
+        ws.onerror = (error: Event) => {
           console.error('[WsClient] Error:', error);
           // Don't reject here; onclose will fire and handle reconnect
         };
       } catch (e) {
         reject(e);
+        this.scheduleReconnect();
       }
     });
+  }
+
+  private async performAuth(): Promise<void> {
+    if (this.isClosing) return;
+    let token: string | undefined;
+    try {
+      const stored = await chrome.storage.local.get('bridgeToken');
+      token = stored?.bridgeToken as string | undefined;
+    } catch (e) { console.error('[WsClient] Failed to read bridge token:', e); }
+    if (!token) { console.warn('[WsClient] No bridge token configured (set it in the side panel)'); return; }
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.sendBinary({ type: 'AUTH', payload: { token } });
   }
 
   private scheduleReconnect(immediate = false) {
@@ -179,6 +201,36 @@ export class WsClient {
         return;
       }
 
+      if (response.type === 'StreamChunk') {
+        this.onEventCallback({ event: 'llm_stream_chunk', data: response.payload });
+        return;
+      }
+      if (response.type === 'StreamEnd') {
+        this.onEventCallback({ event: 'llm_stream_end', data: response.payload });
+        return;
+      }
+
+      if (response.type === 'Ok' && (response.payload.data as { status?: string } | undefined)?.status === 'auth_ok') {
+        this.authenticated = true;
+        this.startHeartbeat();
+        this.flushOutbox();
+        return;
+      }
+
+      if (response.type === 'Error' && response.payload.request_id === 'auth') {
+        this.authFailed = true;
+        console.error('[WsClient] Bridge authentication failed:', response.payload.message);
+        this.ws?.close();
+        return;
+      }
+
+      if (response.type === 'Ok' && (response.payload.data as { status?: string } | undefined)?.status === 'ping') {
+        if (this.authenticated) {
+          this.sendBinary({ type: 'PING' });
+        }
+        return;
+      }
+
       // Handle request/response correlation
       const reqId = response.payload.request_id;
       if (reqId && this.pending.has(reqId)) {
@@ -207,13 +259,15 @@ export class WsClient {
   }
 
   async send<T>(type: string, payload: object): Promise<T> {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.authenticated) {
       // Buffer the request and reconnect; flushOutbox() sends it once the socket
       // is back up. This replaces the old throw-on-disconnect, which dropped the
       // request the moment the SW woke before the WS reconnected (BUG 2).
       return new Promise<T>((resolve, reject) => {
         this.outbox.push({ type, payload, resolve, reject });
-        this.scheduleReconnect(true);
+        if (!this.ws || this.ws.readyState === WebSocket.CLOSED || this.ws.readyState === WebSocket.CLOSING) {
+          this.scheduleReconnect(true);
+        }
       });
     }
 
@@ -260,9 +314,9 @@ export class WsClient {
    * keepalive (BUG 5).
    */
   ping(): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && this.authenticated) {
       this.sendBinary({ type: 'PING' });
-    } else {
+    } else if (!this.ws || this.ws.readyState === WebSocket.CLOSED || this.ws.readyState === WebSocket.CLOSING) {
       // The SW just woke (keepalive/watchdog alarm): reconnect immediately so any
       // queued messages flush, rather than waiting out the next backoff tick (BUG 2).
       this.scheduleReconnect(true);
@@ -271,12 +325,16 @@ export class WsClient {
 
   close() {
     this.isClosing = true;
+    this.authenticated = false;
     this.stopHeartbeat();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    this.pending.forEach((_, id) => this.pending.delete(id));
+    for (const [id, resolver] of this.pending) {
+      resolver(Promise.reject(new Error('WebSocket closed')));
+    }
+    this.pending.clear();
     // Reject queued messages — the client is shutting down and they will never
     // be sent (BUG 2).
     for (const entry of this.outbox) {
@@ -288,28 +346,6 @@ export class WsClient {
       this.ws = null;
     }
   }
-}
-
-async function discoverBridgeUrl(): Promise<string> {
-  // The bridge binds a fixed port in 9090-9100 (bridge/src/main.rs). The MV3
-  // service worker has no filesystem access to read ~/.momo/bridge_port and no
-  // `process.env`, so discovery is a health-endpoint scan over that range
-  // (BUG 1). Scan ascending and stop at the first healthy port.
-  for (let port = 9000; port <= 9100; port++) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/health`, {
-        method: 'GET',
-        signal: AbortSignal.timeout(100),
-      });
-      if (response.ok) {
-        return `ws://127.0.0.1:${port}/ws`;
-      }
-    } catch {
-      // Port not answering; try the next one.
-    }
-  }
-
-  throw new Error('Could not discover bridge port in 9000-9100');
 }
 
 // Singleton getter
