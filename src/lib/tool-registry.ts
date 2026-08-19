@@ -152,46 +152,65 @@ export class ToolRegistry {
         const waitUntil = args.waitUntil as string || 'networkidle';
         const origin = originOf(context.dom.url);
 
-        // The bridge is the authoritative policy boundary for navigation.
-        const { decision, actionHash } = await authorizeViaBridge({
-          type: 'POLICY_CHECK',
-          payload: {
-            session_id: context.sessionId,
-            action: 'navigate',
-            origin,
-            target: url,
-            arguments: { url },
-            page_revision: context.pageRevision,
-          },
-        });
-
-        if (!decision || !decision.allowed) {
-          return {
-            success: false,
-            error: decision?.reason || 'Bridge unreachable',
-            summary: `Navigation blocked: ${decision?.reason || 'bridge unreachable'}`,
-            navigationOccurred: false,
-            requiresConfirmation: decision?.requires_confirmation,
-          };
+        // Only http/https URLs may be navigated to (scheme hardening).
+        let parsedUrl: URL;
+        try {
+          parsedUrl = new URL(url);
+        } catch {
+          return { success: false, error: 'Invalid URL', summary: 'Navigation blocked: invalid URL', navigationOccurred: false };
+        }
+        if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+          return { success: false, error: 'Only http/https URLs are allowed', summary: 'Navigation blocked: only http/https URLs are allowed', navigationOccurred: false };
         }
 
-        // Honor the bridge's confirmation requirement (MOMO-022/023).
-        if (decision.requires_confirmation && !context.preAuthorized) {
-          return {
-            success: false,
-            error: 'Requires confirmation',
-            summary: 'Navigation requires confirmation',
-            navigationOccurred: false,
-            requiresConfirmation: true,
-            confirmationData: {
-              origin,
+        // The bridge is the authoritative policy boundary for navigation. When
+        // preAuthorized, the human already approved this exact action: skip the
+        // bridge so the token ledger is not double-charged.
+        let decision: PolicyDecision | null = null;
+        let actionHash: string | null = null;
+        if (!context.preAuthorized) {
+          const auth = await authorizeViaBridge({
+            type: 'POLICY_CHECK',
+            payload: {
+              session_id: context.sessionId,
               action: 'navigate',
+              origin,
               target: url,
-              data: { url },
-              reversible: true,
-              riskClass: decision.risk_class,
+              arguments: { url },
+              page_revision: context.pageRevision,
             },
-          };
+          });
+          decision = auth.decision;
+          actionHash = auth.actionHash;
+
+          if (!decision || !decision.allowed) {
+            return {
+              success: false,
+              error: decision?.reason || 'Bridge unreachable',
+              summary: `Navigation blocked: ${decision?.reason || 'bridge unreachable'}`,
+              navigationOccurred: false,
+              requiresConfirmation: decision?.requires_confirmation,
+            };
+          }
+
+          // Honor the bridge's confirmation requirement (MOMO-022/023).
+          if (decision.requires_confirmation && !context.preAuthorized) {
+            return {
+              success: false,
+              error: 'Requires confirmation',
+              summary: 'Navigation requires confirmation',
+              navigationOccurred: false,
+              requiresConfirmation: true,
+              confirmationData: {
+                origin,
+                action: 'navigate',
+                target: url,
+                data: { url },
+                reversible: true,
+                riskClass: decision.risk_class,
+              },
+            };
+          }
         }
 
         // Navigate the *active* tab — a tabId is required (MOMO-119).
@@ -530,85 +549,97 @@ export class ToolRegistry {
         // The bridge is the authoritative policy gate for write actions. The
         // typed text is redacted to its length so the secret never reaches the
         // audit log (mirroring the bridge's own SimulateType handling).
-        // Include ref_id in arguments for audit trail.
-        const { decision, actionHash } = await authorizeViaBridge({
-          type: 'POLICY_CHECK',
-          payload: {
-            session_id: context.sessionId,
-            action: 'type',
-            origin,
-            target: refId || selector,
-            arguments: { selector, ref_id: refId, text_length: text.length },
-            page_revision: context.pageRevision,
-          },
-        });
-
-        if (!decision || !decision.allowed) {
-          return {
-            success: false,
-            error: decision?.reason || 'Bridge unreachable',
-            summary: `Type blocked: ${decision?.reason || 'bridge unreachable'}`,
-            navigationOccurred: false,
-            requiresConfirmation: decision?.requires_confirmation,
-          };
-        }
-
-        if (decision.requires_confirmation && !context.preAuthorized) {
-          return {
-            success: false,
-            error: 'Requires confirmation',
-            summary: 'Type requires confirmation',
-            navigationOccurred: false,
-            requiresConfirmation: true,
-            confirmationData: {
-              origin,
+        // Include ref_id in arguments for audit trail. When preAuthorized, the
+        // human already approved this exact action: skip the bridge so the
+        // token ledger is not double-charged.
+        let decision: PolicyDecision | null = null;
+        let actionHash: string | null = null;
+        if (!context.preAuthorized) {
+          const auth = await authorizeViaBridge({
+            type: 'POLICY_CHECK',
+            payload: {
+              session_id: context.sessionId,
               action: 'type',
+              origin,
               target: refId || selector,
-              data: { selector, ref_id: refId, text: '[REDACTED]', clearFirst, pressEnter },
-              reversible: false,
-              riskClass: decision.risk_class,
+              arguments: { selector, ref_id: refId, text_length: text.length },
+              page_revision: context.pageRevision,
             },
-          };
-        }
+          });
+          decision = auth.decision;
+          actionHash = auth.actionHash;
 
-        // Resolve the field descriptor, verify visibility, and focus/clear it in a
-        // single content-script injection (MOMO-118): the sensitive check and the
-        // focus happen atomically on the same element so the target cannot be
-        // swapped to a sensitive input between the check and the write.
-        // Try ref_id first for stable targeting.
-        const probe = await chrome.scripting.executeScript({
-          target: { tabId: context.tabId, allFrames: false },
-          func: (sel: string, clear: boolean, rId: string | undefined) => {
-            // Try ref_id first
-            let el: HTMLInputElement | HTMLTextAreaElement | null = null;
-            if (rId) {
-              // @ts-ignore - perception module injected globally
-              el = window.__perceptionFindByRefId?.(rId) as HTMLInputElement | HTMLTextAreaElement | null;
-            }
-            if (!el) {
-              el = document.querySelector(sel) as HTMLInputElement | HTMLTextAreaElement | null;
-            }
-            if (!el) return { success: false, error: 'Element not found' };
-            if (!el.checkVisibility()) return { success: false, error: 'Element not visible' };
-
-            el.focus();
-            if (clear) {
-              el.value = '';
-              el.dispatchEvent(new Event('input', { bubbles: true }));
-            }
-
+          if (!decision || !decision.allowed) {
             return {
-              success: true,
-              field: {
-                type: el.type || '',
-                autocomplete: el.autocomplete || '',
-                name: el.name || '',
-                id: el.id || '',
+              success: false,
+              error: decision?.reason || 'Bridge unreachable',
+              summary: `Type blocked: ${decision?.reason || 'bridge unreachable'}`,
+              navigationOccurred: false,
+              requiresConfirmation: decision?.requires_confirmation,
+            };
+          }
+
+          if (decision.requires_confirmation && !context.preAuthorized) {
+            return {
+              success: false,
+              error: 'Requires confirmation',
+              summary: 'Type requires confirmation',
+              navigationOccurred: false,
+              requiresConfirmation: true,
+              confirmationData: {
+                origin,
+                action: 'type',
+                target: refId || selector,
+                data: { selector, ref_id: refId, text: '[REDACTED]', clearFirst, pressEnter },
+                reversible: false,
+                riskClass: decision.risk_class,
               },
             };
-          },
-          args: [selector, clearFirst, refId],
-        });
+          }
+        }
+
+        // Resolve the field descriptor, verify visibility, and focus it in a
+        // single content-script injection (MOMO-118): the sensitive check and the
+        // focus happen atomically on the same element so the target cannot be
+        // swapped to a sensitive input between the check and the write. The field
+        // is NEVER cleared here — clearing happens only after the sensitive gate
+        // passes, so a sensitive field's existing value survives a denied attempt.
+        // Try ref_id first for stable targeting.
+        let probe;
+        try {
+          probe = await chrome.scripting.executeScript({
+            target: { tabId: context.tabId, allFrames: false },
+            func: (sel: string, rId: string | undefined) => {
+              // Try ref_id first
+              let el: HTMLInputElement | HTMLTextAreaElement | null = null;
+              if (rId) {
+                // @ts-ignore - perception module injected globally
+                el = window.__perceptionFindByRefId?.(rId) as HTMLInputElement | HTMLTextAreaElement | null;
+              }
+              if (!el) {
+                el = document.querySelector(sel) as HTMLInputElement | HTMLTextAreaElement | null;
+              }
+              if (!el) return { success: false, error: 'Element not found' };
+              if (!el.checkVisibility()) return { success: false, error: 'Element not visible' };
+
+              el.focus();
+
+              return {
+                success: true,
+                field: {
+                  type: el.type || '',
+                  autocomplete: el.autocomplete || '',
+                  name: el.name || '',
+                  id: el.id || '',
+                },
+              };
+            },
+            args: [selector, refId],
+          });
+        } catch (e) {
+          await reportActionResult(context.sessionId, actionHash, false, String(e));
+          return { success: false, error: String(e), summary: 'Type failed', navigationOccurred: false };
+        }
 
         const res = probe[0]?.result;
         if (!res || !res.success) {
@@ -617,8 +648,9 @@ export class ToolRegistry {
         }
 
         // Sensitive-field gate uses the shared detector (isSensitiveInput) rather
-        // than a weaker inline duplicate (MOMO-021/087/088). Focusing/clearing is
-        // harmless; only the actual typing (insertText below) is gated.
+        // than a weaker inline duplicate (MOMO-021/087/088). Only the actual
+        // typing (insertText below) and the post-gate clear are gated; nothing
+        // mutates the field before this check passes.
         const isSensitive = res.field ? isSensitiveInput(res.field) : true;
         if (isSensitive && !context.preAuthorized) {
           return {
@@ -636,6 +668,42 @@ export class ToolRegistry {
               riskClass: 'auth',
             },
           };
+        }
+
+        // The gate passed: now it is safe to clear the field (MOMO-118). A
+        // second injection re-resolves the same element (ref-first, then
+        // selector), re-checks visibility, then clears it.
+        if (clearFirst) {
+          let clearProbe;
+          try {
+            clearProbe = await chrome.scripting.executeScript({
+              target: { tabId: context.tabId, allFrames: false },
+              func: (sel: string, rId: string | undefined) => {
+                let el: HTMLInputElement | HTMLTextAreaElement | null = null;
+                if (rId) {
+                  // @ts-ignore - perception module injected globally
+                  el = window.__perceptionFindByRefId?.(rId) as HTMLInputElement | HTMLTextAreaElement | null;
+                }
+                if (!el) {
+                  el = document.querySelector(sel) as HTMLInputElement | HTMLTextAreaElement | null;
+                }
+                if (!el) return { success: false, error: 'Element not found' };
+                if (!el.checkVisibility()) return { success: false, error: 'Element not visible' };
+                el.value = '';
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                return { success: true };
+              },
+              args: [selector, refId],
+            });
+          } catch (e) {
+            await reportActionResult(context.sessionId, actionHash, false, String(e));
+            return { success: false, error: String(e), summary: 'Type failed', navigationOccurred: false };
+          }
+          const clearRes = clearProbe[0]?.result;
+          if (!clearRes || !clearRes.success) {
+            await reportActionResult(context.sessionId, actionHash, false, clearRes?.error || 'Clear failed');
+            return { success: false, error: clearRes?.error || 'Clear failed', summary: `Type failed: ${clearRes?.error || 'clear failed'}`, navigationOccurred: false };
+          }
         }
 
         const sessionId = await context.getCdpSession();
@@ -759,7 +827,10 @@ export class ToolRegistry {
         const includeMarkdown = args.includeMarkdown as boolean ?? true;
 
         // Run both extraction and perception in parallel
-        const [extractResult, perceptionResult] = await Promise.all([
+        let extractResult;
+        let perceptionResult;
+        try {
+          [extractResult, perceptionResult] = await Promise.all([
           chrome.scripting.executeScript({
             target: { tabId: context.tabId, allFrames: false },
             func: (sel: string, sch: Record<string, { selector?: string; attribute?: string; text?: boolean }>, multi: boolean) => {
@@ -784,15 +855,18 @@ export class ToolRegistry {
             },
             args: [selector, schema, multiple],
           }),
-          chrome.scripting.executeScript({
-            target: { tabId: context.tabId, allFrames: false },
-            func: (includeMd: boolean) => {
-              // @ts-ignore - perception module is injected via content script
-              return window.__perceptionExtract(includeMd);
-            },
-            args: [includeMarkdown],
-          }),
-        ]);
+            chrome.scripting.executeScript({
+              target: { tabId: context.tabId, allFrames: false },
+              func: (includeMd: boolean) => {
+                // @ts-ignore - perception module is injected via content script
+                return window.__perceptionExtract(includeMd);
+              },
+              args: [includeMarkdown],
+            }),
+          ]);
+        } catch (e) {
+          return { success: false, error: String(e), summary: 'Extract failed', navigationOccurred: false };
+        }
 
         const data = extractResult[0]?.result || [];
         const perception = perceptionResult[0]?.result as {
@@ -842,26 +916,31 @@ export class ToolRegistry {
 
         const selector = args.selector as string;
         const condition = args.condition as string || 'visible';
-        const timeout = args.timeout as number || 5000;
+        const timeoutMs = Math.min(typeof args.timeout === 'number' && Number.isFinite(args.timeout) ? args.timeout : 5000, 60_000);
 
         const startTime = Date.now();
-        while (Date.now() - startTime < timeout) {
-          const result = await chrome.scripting.executeScript({
-            target: { tabId: context.tabId, allFrames: false },
-            func: (sel: string, cond: string) => {
-              const el = document.querySelector(sel);
-              if (!el) return false;
+        while (Date.now() - startTime < timeoutMs) {
+          let result;
+          try {
+            result = await chrome.scripting.executeScript({
+              target: { tabId: context.tabId, allFrames: false },
+              func: (sel: string, cond: string) => {
+                const el = document.querySelector(sel);
+                if (!el) return false;
 
-              switch (cond) {
-                case 'visible': return el.checkVisibility();
-                case 'hidden': return !el.checkVisibility();
-                case 'enabled': return !(el as HTMLInputElement).disabled;
-                case 'disabled': return !!(el as HTMLInputElement).disabled;
-              }
-              return false;
-            },
-            args: [selector, condition],
-          });
+                switch (cond) {
+                  case 'visible': return el.checkVisibility();
+                  case 'hidden': return !el.checkVisibility();
+                  case 'enabled': return !(el as HTMLInputElement).disabled;
+                  case 'disabled': return !!(el as HTMLInputElement).disabled;
+                }
+                return false;
+              },
+              args: [selector, condition],
+            });
+          } catch (e) {
+            return { success: false, error: String(e), summary: 'Wait failed', navigationOccurred: false };
+          }
 
           if (result[0]?.result === true) {
             return { success: true, summary: `Condition "${condition}" met for ${selector}`, navigationOccurred: false };
@@ -897,14 +976,19 @@ export class ToolRegistry {
         const includeMarkdown = args.includeMarkdown as boolean ?? true;
 
         // Run perception in content script
-        const perceptionResult = await chrome.scripting.executeScript({
-          target: { tabId: context.tabId, allFrames: false },
-          func: (includeMd: boolean) => {
-            // @ts-ignore - perception module is injected via content script
-            return window.__perceptionExtract(includeMd);
-          },
-          args: [includeMarkdown],
-        });
+        let perceptionResult;
+        try {
+          perceptionResult = await chrome.scripting.executeScript({
+            target: { tabId: context.tabId, allFrames: false },
+            func: (includeMd: boolean) => {
+              // @ts-ignore - perception module is injected via content script
+              return window.__perceptionExtract(includeMd);
+            },
+            args: [includeMarkdown],
+          });
+        } catch (e) {
+          return { success: false, error: String(e), summary: 'Observe failed', navigationOccurred: false };
+        }
 
         const perception = perceptionResult[0]?.result as {
           markdown_content: string;
@@ -959,17 +1043,22 @@ export class ToolRegistry {
 
         // If ref_id provided, resolve to coordinates first
         if (refId && (x === undefined || y === undefined)) {
-          const probe = await chrome.scripting.executeScript({
-            target: { tabId: context.tabId, allFrames: false },
-            func: (rId: string) => {
-              // @ts-ignore - perception module injected globally
-              const el = window.__perceptionFindByRefId?.(rId) as HTMLElement | null;
-              if (!el || !el.checkVisibility()) return { success: false, error: 'Element not found or not visible' };
-              const rect = el.getBoundingClientRect();
-              return { success: true, x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-            },
-            args: [refId],
-          });
+          let probe;
+          try {
+            probe = await chrome.scripting.executeScript({
+              target: { tabId: context.tabId, allFrames: false },
+              func: (rId: string) => {
+                // @ts-ignore - perception module injected globally
+                const el = window.__perceptionFindByRefId?.(rId) as HTMLElement | null;
+                if (!el || !el.checkVisibility()) return { success: false, error: 'Element not found or not visible' };
+                const rect = el.getBoundingClientRect();
+                return { success: true, x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+              },
+              args: [refId],
+            });
+          } catch (e) {
+            return { success: false, error: String(e), summary: 'Human click failed', navigationOccurred: false };
+          }
           const res = probe[0]?.result;
           if (!res || !res.success) {
             return { success: false, error: res?.error || 'Failed to resolve ref_id', summary: `Human click failed: ${res?.error}`, navigationOccurred: false };
@@ -985,31 +1074,39 @@ export class ToolRegistry {
         const target = `coords(${x},${y})`;
 
         // The bridge is the authoritative policy gate: never dispatch a trusted
-        // input without an explicit `allowed` decision.
-        const { decision, actionHash } = await authorizeViaBridge({
-          type: 'SIMULATE_CLICK',
-          payload: { session_id: context.sessionId, origin, target, x, y, page_revision: context.pageRevision },
-        });
+        // input without an explicit `allowed` decision. When preAuthorized, the
+        // human already approved this exact action: skip the bridge so the
+        // token ledger is not double-charged.
+        let decision: PolicyDecision | null = null;
+        let actionHash: string | null = null;
+        if (!context.preAuthorized) {
+          const auth = await authorizeViaBridge({
+            type: 'SIMULATE_CLICK',
+            payload: { session_id: context.sessionId, origin, target, x, y, page_revision: context.pageRevision },
+          });
+          decision = auth.decision;
+          actionHash = auth.actionHash;
 
-        if (!decision || !decision.allowed) {
-          return {
-            success: false,
-            error: decision?.reason || 'Bridge unreachable',
-            summary: `Human click blocked: ${decision?.reason || 'bridge unreachable'}`,
-            navigationOccurred: false,
-            requiresConfirmation: decision?.requires_confirmation,
-          };
-        }
+          if (!decision || !decision.allowed) {
+            return {
+              success: false,
+              error: decision?.reason || 'Bridge unreachable',
+              summary: `Human click blocked: ${decision?.reason || 'bridge unreachable'}`,
+              navigationOccurred: false,
+              requiresConfirmation: decision?.requires_confirmation,
+            };
+          }
 
-        if (decision.requires_confirmation && !context.preAuthorized) {
-          return {
-            success: false,
-            error: 'Requires confirmation',
-            summary: 'Human click requires confirmation',
-            navigationOccurred: false,
-            requiresConfirmation: true,
-            confirmationData: { origin, action: 'human_click', target, data: { x, y }, reversible: false, riskClass: decision.risk_class },
-          };
+          if (decision.requires_confirmation && !context.preAuthorized) {
+            return {
+              success: false,
+              error: 'Requires confirmation',
+              summary: 'Human click requires confirmation',
+              navigationOccurred: false,
+              requiresConfirmation: true,
+              confirmationData: { origin, action: 'human_click', target, data: { x, y }, reversible: false, riskClass: decision.risk_class },
+            };
+          }
         }
 
         const sessionId = await context.getCdpSession();
@@ -1058,23 +1155,28 @@ export class ToolRegistry {
 
         // If ref_id provided, focus that element first
         if (refId) {
-          const focusRes = await chrome.scripting.executeScript({
-            target: { tabId: context.tabId, allFrames: false },
-            func: (rId: string) => {
-              // @ts-ignore - perception module injected globally
-              const el = window.__perceptionFindByRefId?.(rId) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
-              if (!el || !el.checkVisibility()) return { success: false, error: 'Element not found or not visible' };
-              el.focus();
-              return {
-                success: true,
-                type: (el as HTMLInputElement).type || '',
-                autocomplete: (el as HTMLInputElement).autocomplete || '',
-                name: (el as HTMLInputElement).name || '',
-                id: (el as HTMLInputElement).id || '',
-              };
-            },
-            args: [refId],
-          });
+          let focusRes;
+          try {
+            focusRes = await chrome.scripting.executeScript({
+              target: { tabId: context.tabId, allFrames: false },
+              func: (rId: string) => {
+                // @ts-ignore - perception module injected globally
+                const el = window.__perceptionFindByRefId?.(rId) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+                if (!el || !el.checkVisibility()) return { success: false, error: 'Element not found or not visible' };
+                el.focus();
+                return {
+                  success: true,
+                  type: (el as HTMLInputElement).type || '',
+                  autocomplete: (el as HTMLInputElement).autocomplete || '',
+                  name: (el as HTMLInputElement).name || '',
+                  id: (el as HTMLInputElement).id || '',
+                };
+              },
+              args: [refId],
+            });
+          } catch (e) {
+            return { success: false, error: String(e), summary: 'Human type failed', navigationOccurred: false };
+          }
           const res = focusRes[0]?.result;
           if (!res || !res.success) {
             return { success: false, error: res?.error || 'Failed to resolve ref_id', summary: `Human type failed: ${res?.error}`, navigationOccurred: false };
@@ -1086,47 +1188,60 @@ export class ToolRegistry {
         // Resolve the currently-focused element so the bridge can make an
         // informed sensitive-field decision for selector-less (focused-element)
         // typing. Fail closed if the active element cannot be inspected.
-        const focusedCheck = await chrome.scripting.executeScript({
-          target: { tabId: context.tabId, allFrames: false },
-          func: () => {
-            const el = document.activeElement as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
-            if (!el) return null;
-            return {
-              type: (el as HTMLInputElement).type || '',
-              autocomplete: (el as HTMLInputElement).autocomplete || '',
-              name: (el as HTMLInputElement).name || '',
-              id: (el as HTMLInputElement).id || '',
-            };
-          },
-        });
+        let focusedCheck;
+        try {
+          focusedCheck = await chrome.scripting.executeScript({
+            target: { tabId: context.tabId, allFrames: false },
+            func: () => {
+              const el = document.activeElement as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+              if (!el) return null;
+              return {
+                type: (el as HTMLInputElement).type || '',
+                autocomplete: (el as HTMLInputElement).autocomplete || '',
+                name: (el as HTMLInputElement).name || '',
+                id: (el as HTMLInputElement).id || '',
+              };
+            },
+          });
+        } catch (e) {
+          return { success: false, error: String(e), summary: 'Human type failed', navigationOccurred: false };
+        }
 
         const focusedField = focusedCheck[0]?.result;
         const fieldIsSensitive = focusedField ? isSensitiveInput(focusedField) : true;
 
-        const { decision, actionHash } = await authorizeViaBridge({
-          type: 'SIMULATE_TYPE',
-          payload: { session_id: context.sessionId, origin, target, selector: null, text, field_is_sensitive: fieldIsSensitive, page_revision: context.pageRevision },
-        });
+        // When preAuthorized, the human already approved this exact action:
+        // skip the bridge so the token ledger is not double-charged.
+        let decision: PolicyDecision | null = null;
+        let actionHash: string | null = null;
+        if (!context.preAuthorized) {
+          const auth = await authorizeViaBridge({
+            type: 'SIMULATE_TYPE',
+            payload: { session_id: context.sessionId, origin, target, selector: null, text, field_is_sensitive: fieldIsSensitive, page_revision: context.pageRevision },
+          });
+          decision = auth.decision;
+          actionHash = auth.actionHash;
 
-        if (!decision || !decision.allowed) {
-          return {
-            success: false,
-            error: decision?.reason || 'Bridge unreachable',
-            summary: `Human type blocked: ${decision?.reason || 'bridge unreachable'}`,
-            navigationOccurred: false,
-            requiresConfirmation: decision?.requires_confirmation,
-          };
-        }
+          if (!decision || !decision.allowed) {
+            return {
+              success: false,
+              error: decision?.reason || 'Bridge unreachable',
+              summary: `Human type blocked: ${decision?.reason || 'bridge unreachable'}`,
+              navigationOccurred: false,
+              requiresConfirmation: decision?.requires_confirmation,
+            };
+          }
 
-        if (decision.requires_confirmation && !context.preAuthorized) {
-          return {
-            success: false,
-            error: 'Requires confirmation',
-            summary: 'Human type requires confirmation',
-            navigationOccurred: false,
-            requiresConfirmation: true,
-            confirmationData: { origin, action: 'human_type', target, data: { text: '[REDACTED]' }, reversible: false, riskClass: decision.risk_class },
-          };
+          if (decision.requires_confirmation && !context.preAuthorized) {
+            return {
+              success: false,
+              error: 'Requires confirmation',
+              summary: 'Human type requires confirmation',
+              navigationOccurred: false,
+              requiresConfirmation: true,
+              confirmationData: { origin, action: 'human_type', target, data: { text: '[REDACTED]' }, reversible: false, riskClass: decision.risk_class },
+            };
+          }
         }
 
         const sessionId = await context.getCdpSession();
@@ -1180,10 +1295,24 @@ export class ToolRegistry {
         const text = args.text as string | undefined;
         const url = args.url as string | undefined;
 
+        // Injection defense: ref must match the el_XX format for ref-targeted
+        // actions before any content-script or bridge call is made.
+        if ((action === 'click' || action === 'scroll' || action === 'type') && ref !== undefined && !/^el_\d+$/.test(ref)) {
+          return { success: false, error: 'Invalid ref format', summary: `execute_action ${action}: invalid ref`, navigationOccurred: false };
+        }
+
         switch (action) {
           case 'navigate': {
             if (!url) {
               return { success: false, error: 'Missing url for navigate', summary: 'execute_action navigate: missing url', navigationOccurred: false };
+            }
+            try {
+              const u = new URL(url);
+              if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+                return { success: false, error: 'Only http/https URLs are allowed', summary: 'execute_action navigate: only http/https URLs are allowed', navigationOccurred: false };
+              }
+            } catch {
+              return { success: false, error: 'Invalid URL', summary: 'execute_action navigate: invalid URL', navigationOccurred: false };
             }
             const navigateTool = this.tools.get('navigate');
             if (!navigateTool) {
@@ -1193,24 +1322,69 @@ export class ToolRegistry {
           }
 
           case 'scroll': {
-            const result = await chrome.scripting.executeScript({
-              target: { tabId: context.tabId, allFrames: false },
-              func: (r: string | undefined) => {
-                if (!r) {
-                  window.scrollBy(0, window.innerHeight * 0.8);
+            if (ref !== undefined && !/^el_\d+$/.test(ref)) {
+              return { success: false, error: 'Invalid ref format', summary: 'execute_action scroll: invalid ref', navigationOccurred: false };
+            }
+            const origin = originOf(context.dom.url);
+
+            // The bridge is the authoritative policy gate for write actions.
+            // When preAuthorized, the human already approved this exact action:
+            // skip the bridge so the token ledger is not double-charged.
+            let decision: PolicyDecision | null = null;
+            let actionHash: string | null = null;
+            if (!context.preAuthorized) {
+              const auth = await authorizeViaBridge({
+                type: 'POLICY_CHECK',
+                payload: {
+                  session_id: context.sessionId,
+                  action: 'scroll',
+                  origin,
+                  target: ref ?? 'window',
+                  arguments: { ref },
+                  page_revision: context.pageRevision,
+                },
+              });
+              decision = auth.decision;
+              actionHash = auth.actionHash;
+
+              if (!decision || !decision.allowed) {
+                return { success: false, error: decision?.reason || 'Bridge unreachable', summary: `Scroll blocked: ${decision?.reason || 'bridge unreachable'}`, navigationOccurred: false, requiresConfirmation: decision?.requires_confirmation };
+              }
+              if (decision.requires_confirmation && !context.preAuthorized) {
+                return { success: false, error: 'Requires confirmation', summary: 'Scroll requires confirmation', navigationOccurred: false, requiresConfirmation: true, confirmationData: { origin, action: 'scroll', target: ref ?? 'window', data: { ref }, reversible: true, riskClass: decision.risk_class } };
+              }
+            }
+
+            let result;
+            try {
+              result = await chrome.scripting.executeScript({
+                target: { tabId: context.tabId, allFrames: false },
+                func: (r: string | undefined) => {
+                  if (!r) {
+                    window.scrollBy(0, window.innerHeight * 0.8);
+                    return { success: true };
+                  }
+                  const el = document.querySelector(`[data-momo-ref="${r}"]`) as HTMLElement | null;
+                  if (!el || !el.isConnected || !el.checkVisibility()) return { status: 'stale_reference', ref: r };
+                  el.scrollTop += el.clientHeight * 0.8;
                   return { success: true };
-                }
-                const el = document.querySelector(`[data-momo-ref="${r}"]`) as HTMLElement | null;
-                if (!el || !el.isConnected || !el.checkVisibility()) return { status: 'stale_reference', ref: r };
-                el.scrollTop += el.clientHeight * 0.8;
-                return { success: true };
-              },
-              args: [ref],
-            });
+                },
+                args: [ref],
+              });
+            } catch (e) {
+              await reportActionResult(context.sessionId, actionHash, false, String(e));
+              return { success: false, error: String(e), summary: 'execute_action scroll failed', navigationOccurred: false };
+            }
             const res = result[0]?.result as { success?: boolean; status?: string } | undefined;
             if (res && res.status === 'stale_reference') {
+              await reportActionResult(context.sessionId, actionHash, false, 'stale_reference');
               return { success: false, error: 'stale_reference', summary: `execute_action scroll: stale reference ${ref}`, data: { error: 'stale_reference', ref, hint: 're-fetch get_interactive_elements' }, navigationOccurred: false };
             }
+            if (!res || res.success !== true) {
+              await reportActionResult(context.sessionId, actionHash, false, 'Scroll failed');
+              return { success: false, error: 'Scroll failed', summary: 'execute_action scroll failed', navigationOccurred: false };
+            }
+            await reportActionResult(context.sessionId, actionHash, true);
             return { success: true, summary: `Scrolled ${ref ? `element ${ref}` : 'window'}`, navigationOccurred: false };
           }
 
@@ -1220,21 +1394,35 @@ export class ToolRegistry {
             }
             const origin = originOf(context.dom.url);
 
-            const { decision, actionHash } = await authorizeViaBridge({
-              type: 'POLICY_CHECK',
-              payload: { session_id: context.sessionId, action: 'click', origin, target: ref, arguments: { ref }, page_revision: context.pageRevision },
-            });
-            if (!decision || !decision.allowed) {
-              return { success: false, error: decision?.reason || 'Bridge unreachable', summary: `Click blocked: ${decision?.reason || 'bridge unreachable'}`, navigationOccurred: false, requiresConfirmation: decision?.requires_confirmation };
-            }
-            if (decision.requires_confirmation && !context.preAuthorized) {
-              return { success: false, error: 'Requires confirmation', summary: 'Click requires confirmation', navigationOccurred: false, requiresConfirmation: true, confirmationData: { origin, action: 'click', target: ref, data: { ref }, reversible: false, riskClass: decision.risk_class } };
+            // When preAuthorized, the human already approved this exact action:
+            // skip the bridge so the token ledger is not double-charged.
+            let decision: PolicyDecision | null = null;
+            let actionHash: string | null = null;
+            if (!context.preAuthorized) {
+              const auth = await authorizeViaBridge({
+                type: 'POLICY_CHECK',
+                payload: { session_id: context.sessionId, action: 'click', origin, target: ref, arguments: { ref }, page_revision: context.pageRevision },
+              });
+              decision = auth.decision;
+              actionHash = auth.actionHash;
+              if (!decision || !decision.allowed) {
+                return { success: false, error: decision?.reason || 'Bridge unreachable', summary: `Click blocked: ${decision?.reason || 'bridge unreachable'}`, navigationOccurred: false, requiresConfirmation: decision?.requires_confirmation };
+              }
+              if (decision.requires_confirmation && !context.preAuthorized) {
+                return { success: false, error: 'Requires confirmation', summary: 'Click requires confirmation', navigationOccurred: false, requiresConfirmation: true, confirmationData: { origin, action: 'click', target: ref, data: { ref }, reversible: false, riskClass: decision.risk_class } };
+              }
             }
 
             const resolved = await this.resolveRefStrict(context.tabId, ref);
             if (resolved.status !== 'ok') {
               await reportActionResult(context.sessionId, actionHash, false, 'stale_reference');
               return { success: false, error: 'stale_reference', summary: `execute_action click: stale reference ${ref}`, data: { error: 'stale_reference', ref, hint: 're-fetch get_interactive_elements' }, navigationOccurred: false };
+            }
+
+            // Destructive/sensitive targets require human confirmation before an
+            // irreversible write.
+            if (resolved.destructive && !context.preAuthorized) {
+              return { success: false, error: 'Destructive or sensitive target - requires human confirmation', summary: `Click blocked: potentially destructive target "${ref}"`, navigationOccurred: false, requiresConfirmation: true, confirmationData: { origin, action: 'click', target: ref, data: { ref }, reversible: false, riskClass: 'write' } };
             }
 
             const sessionId = await context.getCdpSession();
@@ -1269,15 +1457,23 @@ export class ToolRegistry {
             }
             const fieldIsSensitive = isSensitiveInput(focused.field);
 
-            const { decision, actionHash } = await authorizeViaBridge({
-              type: 'POLICY_CHECK',
-              payload: { session_id: context.sessionId, action: 'type', origin, target: ref, arguments: { ref, text_length: text.length, field_is_sensitive: fieldIsSensitive }, page_revision: context.pageRevision },
-            });
-            if (!decision || !decision.allowed) {
-              return { success: false, error: decision?.reason || 'Bridge unreachable', summary: `Type blocked: ${decision?.reason || 'bridge unreachable'}`, navigationOccurred: false, requiresConfirmation: decision?.requires_confirmation };
-            }
-            if (decision.requires_confirmation && !context.preAuthorized) {
-              return { success: false, error: 'Requires confirmation', summary: 'Type requires confirmation', navigationOccurred: false, requiresConfirmation: true, confirmationData: { origin, action: 'type', target: ref, data: { ref, text: '[REDACTED]' }, reversible: false, riskClass: decision.risk_class } };
+            // When preAuthorized, the human already approved this exact action:
+            // skip the bridge so the token ledger is not double-charged.
+            let decision: PolicyDecision | null = null;
+            let actionHash: string | null = null;
+            if (!context.preAuthorized) {
+              const auth = await authorizeViaBridge({
+                type: 'POLICY_CHECK',
+                payload: { session_id: context.sessionId, action: 'type', origin, target: ref, arguments: { ref, text_length: text.length, field_is_sensitive: fieldIsSensitive }, page_revision: context.pageRevision },
+              });
+              decision = auth.decision;
+              actionHash = auth.actionHash;
+              if (!decision || !decision.allowed) {
+                return { success: false, error: decision?.reason || 'Bridge unreachable', summary: `Type blocked: ${decision?.reason || 'bridge unreachable'}`, navigationOccurred: false, requiresConfirmation: decision?.requires_confirmation };
+              }
+              if (decision.requires_confirmation && !context.preAuthorized) {
+                return { success: false, error: 'Requires confirmation', summary: 'Type requires confirmation', navigationOccurred: false, requiresConfirmation: true, confirmationData: { origin, action: 'type', target: ref, data: { ref, text: '[REDACTED]' }, reversible: false, riskClass: decision.risk_class } };
+              }
             }
             if (fieldIsSensitive && !context.preAuthorized) {
               return { success: false, error: 'Sensitive field detected - requires human confirmation', summary: 'Type blocked: sensitive field', navigationOccurred: false, requiresConfirmation: true, confirmationData: { origin, action: 'type', target: ref, data: { ref, text: '[REDACTED]' }, reversible: false, riskClass: 'auth' } };
@@ -1335,24 +1531,49 @@ export class ToolRegistry {
     });
   }
 
-  /** Strict-resolve an el_XX ref to its clickable center (no CSS fallback). */
+  /** Strict-resolve an el_XX ref to its clickable center (no CSS fallback),
+   * computing destructive detection for the resolved element in-page. */
   private async resolveRefStrict(
     tabId: number,
     ref: string,
-  ): Promise<{ status: 'ok'; x: number; y: number } | { status: 'stale_reference' }> {
-    const probe = await chrome.scripting.executeScript({
-      target: { tabId, allFrames: false },
-      func: (r: string) => {
-        // @ts-ignore - perception module injected globally
-        return window.__perceptionResolveByRefStrict?.(r) ?? { status: 'stale_reference', ref: r };
-      },
-      args: [ref],
-    });
+  ): Promise<{ status: 'ok'; x: number; y: number; destructive: boolean } | { status: 'stale_reference' }> {
+    let probe;
+    try {
+      probe = await chrome.scripting.executeScript({
+        target: { tabId, allFrames: false },
+        func: (r: string) => {
+          // @ts-ignore - perception module injected globally
+          const base = window.__perceptionResolveByRefStrict?.(r);
+          if (!base || base.status !== 'ok') return { status: 'stale_reference', ref: r };
+          const el = document.querySelector(`[data-momo-ref="${r}"]`) as HTMLElement | null;
+          const DESTRUCTIVE_KEYWORDS = [
+            'pay', 'buy', 'purchase', 'checkout', 'order', 'confirm', 'submit',
+            'delete', 'remove', 'cancel', 'logout', 'sign out', 'signout',
+            'deactivate', 'close account', 'unsubscribe', 'transfer', 'refund',
+          ];
+          let destructive = false;
+          if (el) {
+            const tag = el.tagName.toLowerCase();
+            const inputType = (el as HTMLInputElement).type || '';
+            const buttonType = (el as HTMLButtonElement).type || 'submit';
+            const rawText = (el.textContent || (el as HTMLInputElement).value || el.getAttribute('aria-label') || el.getAttribute('value') || '').toLowerCase();
+            const isFormSubmitControl =
+              (tag === 'input' && (inputType === 'submit' || inputType === 'image')) ||
+              (tag === 'button' && buttonType === 'submit' && el.closest('form') !== null);
+            destructive = isFormSubmitControl || DESTRUCTIVE_KEYWORDS.some(k => rawText.includes(k));
+          }
+          return { status: 'ok', x: base.x, y: base.y, destructive };
+        },
+        args: [ref],
+      });
+    } catch {
+      return { status: 'stale_reference' };
+    }
     const res = probe[0]?.result as
-      | { status: 'ok'; x: number; y: number }
+      | { status: 'ok'; x: number; y: number; destructive: boolean }
       | { status: 'stale_reference' }
       | undefined;
-    if (res && res.status === 'ok') return { status: 'ok', x: res.x, y: res.y };
+    if (res && res.status === 'ok') return { status: 'ok', x: res.x, y: res.y, destructive: res.destructive };
     return { status: 'stale_reference' };
   }
 
@@ -1364,19 +1585,24 @@ export class ToolRegistry {
     | { status: 'ok'; field: { type: string; autocomplete: string; name: string; id: string } }
     | { status: 'stale_reference' }
   > {
-    const probe = await chrome.scripting.executeScript({
-      target: { tabId, allFrames: false },
-      func: (r: string) => {
-        const el = document.querySelector(`[data-momo-ref="${r}"]`) as HTMLInputElement | HTMLTextAreaElement | null;
-        if (!el || !el.isConnected || !el.checkVisibility()) return { status: 'stale_reference', ref: r };
-        el.focus();
-        return {
-          status: 'ok',
-          field: { type: el.type || '', autocomplete: el.autocomplete || '', name: el.name || '', id: el.id || '' },
-        };
-      },
-      args: [ref],
-    });
+    let probe;
+    try {
+      probe = await chrome.scripting.executeScript({
+        target: { tabId, allFrames: false },
+        func: (r: string) => {
+          const el = document.querySelector(`[data-momo-ref="${r}"]`) as HTMLInputElement | HTMLTextAreaElement | null;
+          if (!el || !el.isConnected || !el.checkVisibility()) return { status: 'stale_reference', ref: r };
+          el.focus();
+          return {
+            status: 'ok',
+            field: { type: el.type || '', autocomplete: el.autocomplete || '', name: el.name || '', id: el.id || '' },
+          };
+        },
+        args: [ref],
+      });
+    } catch {
+      return { status: 'stale_reference' };
+    }
     const res = probe[0]?.result as
       | { status: 'ok'; field: { type: string; autocomplete: string; name: string; id: string } }
       | { status: 'stale_reference' }
@@ -1386,6 +1612,7 @@ export class ToolRegistry {
   }
 
   register(definition: ToolDefinition) {
+    if (this.tools.has(definition.name)) throw new Error(`Tool already registered: ${definition.name}`);
     this.tools.set(definition.name, definition);
   }
 
@@ -1426,7 +1653,7 @@ export class ToolRegistry {
     const required = schema.required ?? [];
 
     for (const key of required) {
-      if (!(key in args)) return `Missing required argument: ${key}`;
+      if (!(key in args) || args[key] === undefined) return `Missing required argument: ${key}`;
     }
 
     for (const [key, value] of Object.entries(args)) {
@@ -1446,7 +1673,7 @@ export class ToolRegistry {
           if (typeof value !== 'string') return `Argument ${key} must be a string`;
           break;
         case 'number':
-          if (typeof value !== 'number') return `Argument ${key} must be a number`;
+          if (typeof value !== 'number' || !Number.isFinite(value)) return `Argument ${key} must be a finite number`;
           break;
         case 'boolean':
           if (typeof value !== 'boolean') return `Argument ${key} must be a boolean`;
