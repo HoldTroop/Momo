@@ -5,6 +5,7 @@ import { redactText, redactValue } from '../lib/redaction.js';
 import { TaskQueue } from '../lib/task-queue.js';
 import { cdpAdapter } from './cdp-adapter.js';
 import { getWsClient } from './ws-client.js';
+import { ensureDebuggerPermission, ensureHostPermission } from '../lib/permissions.js';
 
 /** How long to wait for a human confirmation before auto-denying (MOMO-045). */
 const CONFIRMATION_TIMEOUT_MS = 60_000;
@@ -36,6 +37,7 @@ export interface HumanInterventionState {
   stepId: string;
   actionHash: string;
   pageRevision: number;
+  timerId?: ReturnType<typeof setTimeout>;
 }
 
 export interface HumanResponse {
@@ -169,8 +171,12 @@ export class AgentOrchestrator {
   private state: AgentState | null = null;
   private activeSessionId: string | null = null;
   private isRunning = false;
+  private runToken = 0;
   private abortController: AbortController | null = null;
   private cdpSessionId: string | null = null;
+  private drivingTabId: number | null = null;
+  private cdpSessionTabId: number | null = null;
+  private inPersistBroadcast = false;
 
   constructor(persistence: PersistenceManager) {
     this.persistence = persistence;
@@ -240,7 +246,7 @@ export class AgentOrchestrator {
     this.state = {
       sessionId,
       goal,
-      plan: options?.plan || null,
+      plan: options?.plan ? this.normalizePlan(options.plan) : null,
       currentStep: 0,
       history: [],
       variables: {},
@@ -254,78 +260,134 @@ export class AgentOrchestrator {
       error: null,
     };
 
-    await this.persistState();
-
-    // The extension is a pure automation bridge: it does not plan. When no plan
-    // is supplied, external agents drive execution via EXECUTE_TOOL against the
-    // persisted session. The run loop simply stays idle (no steps to run).
-    if (options?.plan) {
-      this.state.plan = options.plan;
+    try {
+      await this.persistState();
+      this.broadcastUi('TASK_STARTED', { sessionId, goal });
+      if (this.state?.plan) {
+        this.broadcastUi('PLAN_CREATED', {
+          sessionId,
+          plan: {
+            goal: this.state!.plan!.goal,
+            steps: this.state!.plan!.steps.map(s => ({ id: s.id, action: s.action, expectedOutcome: s.expectedOutcome })),
+          },
+        });
+      }
+      this.broadcastUi('STATE_UPDATE', { state: this.sanitizeStateForUi() });
+    } catch (error) {
+      this.isRunning = false;
+      this.abortController?.abort();
+      throw error;
     }
 
     // Start task queue for this session
     this.taskQueue.startProcessing(sessionId, this.taskProcessor.bind(this));
 
-    this.runLoop();
+    const token = ++this.runToken;
+    void this.runLoop(token).catch(e => {
+      console.error('[Orchestrator] runLoop crashed:', e);
+      this.isRunning = false;
+    });
   }
 
-  private async runLoop() {
-    while (this.isRunning && this.state && !this.abortController?.signal.aborted) {
-      // Check paused state
-      if (this.state.paused) {
-        await this.sleep(1000);
-        continue;
-      }
+  /** C9: Normalize a plan at ingest so the runtime always sees a Plan with an
+   *  array of steps and a real Map of contingencies, whether it arrived as a
+   *  typed Plan or a plain JSON object from an external agent. */
+  private normalizePlan(plan: any): Plan {
+    const steps: PlanStep[] = Array.isArray(plan.steps) ? plan.steps : [];
+    let contingencies: Map<string, PlanStep[]>;
+    if (plan.contingencies instanceof Map) {
+      contingencies = plan.contingencies;
+    } else if (plan.contingencies && typeof plan.contingencies === 'object') {
+      contingencies = new Map<string, PlanStep[]>(Object.entries(plan.contingencies));
+    } else {
+      contingencies = new Map<string, PlanStep[]>();
+    }
+    return {
+      goal: plan.goal ?? '',
+      steps,
+      contingencies,
+    };
+  }
 
-      if (!this.state.plan || this.state.currentStep >= this.state.plan.steps.length) {
-        await this.completeTask();
-        break;
-      }
-
-      const step = this.state.plan.steps[this.state.currentStep];
-      if (!step) {
-        await this.completeTask();
-        break;
-      }
-      const startTime = Date.now();
-      const idempotencyKey = crypto.randomUUID();
-
-      try {
-        const result = await this.executeStep(step, idempotencyKey);
-        const durationMs = Date.now() - startTime;
-
-        this.state.history.push({
-          stepId: step.id,
-          action: step.action,
-          result,
-          timestamp: Date.now(),
-          durationMs,
-          idempotencyKey,
-          pageRevision: this.state.pageRevision,
-        });
-
-        const verified = await this.verifyStep(step, result);
-        if (!verified) {
-          await this.handleStepFailure(step, result, idempotencyKey);
+  private async runLoop(token: number) {
+    try {
+      while (this.isRunning && this.runToken === token && this.state && !this.abortController?.signal.aborted) {
+        // Check paused state
+        if (this.state.paused) {
+          await this.sleep(1000);
           continue;
         }
 
-        this.state.currentStep++;
-        await this.maybeCheckpoint();
+        // C11a: plan-less sessions are driven externally via EXECUTE_TOOL
+        // against the persisted session; the loop just idles until STOP_TASK.
+        if (!this.state.plan) {
+          await this.sleep(1000);
+          continue;
+        }
 
-      } catch (error) {
-        const result: ToolResult = {
-          success: false,
-          error: error instanceof Error ? error.message : String(error),
-          summary: `Step failed: ${error}`,
-          navigationOccurred: false,
-        };
-        await this.handleStepFailure(step, result, idempotencyKey);
+        if (this.state.currentStep >= this.state.plan.steps.length) {
+          await this.completeTask();
+          break;
+        }
+
+        const step = this.state.plan.steps[this.state.currentStep];
+        if (!step) {
+          await this.completeTask();
+          break;
+        }
+        const startTime = Date.now();
+        const idempotencyKey = crypto.randomUUID();
+
+        try {
+          this.broadcastUi('STEP_STARTED', { stepIndex: this.state!.currentStep, action: step.action });
+          const result = await this.executeStep(step, idempotencyKey);
+          // H9: post-abort short-circuit — if the task was aborted while the
+          // step awaited, record nothing and run no failure handling.
+          if (!this.isRunning || this.runToken !== token) break;
+          const durationMs = Date.now() - startTime;
+
+          this.state.history.push({
+            stepId: step.id,
+            action: step.action,
+            result,
+            timestamp: Date.now(),
+            durationMs,
+            idempotencyKey,
+            pageRevision: this.state.pageRevision,
+          });
+
+          const verified = await this.verifyStep(step, result);
+          if (!verified) {
+            await this.handleStepFailure(step, result, idempotencyKey);
+            continue;
+          }
+
+          this.broadcastUi('STEP_COMPLETED', { stepIndex: this.state!.currentStep, result: this.redactResult(result) });
+          this.state.currentStep++;
+          // Checkpoint isolation: a checkpoint failure must not re-enter the
+          // step failure path.
+          try {
+            await this.maybeCheckpoint();
+          } catch (e) {
+            console.error('[Orchestrator] Checkpoint failed:', e);
+          }
+
+        } catch (error) {
+          const result: ToolResult = {
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+            summary: `Step failed: ${error}`,
+            navigationOccurred: false,
+          };
+          await this.handleStepFailure(step, result, idempotencyKey);
+        }
       }
+    } finally {
+      // H8: guaranteed reset — no matter how the loop exits, the agent is not
+      // left marked running.
+      this.isRunning = false;
+      await this.persistState().catch(e => console.error('[Orchestrator] persist after run loop failed:', e));
     }
-
-    this.isRunning = false;
-    await this.persistState();
   }
 
   private async executeStep(step: PlanStep, idempotencyKey: string): Promise<ToolResult> {
@@ -366,7 +428,14 @@ export class AgentOrchestrator {
       getCdpSession: () => this.getOrCreateCdpSession(),
     };
 
-    let result = await tool.execute(toolCall.arguments, context);
+    let result: ToolResult;
+    try {
+      result = await tool.execute(toolCall.arguments, context);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error('[Orchestrator] Tool executor threw:', toolCall.name, msg);
+      result = { success: false, error: msg, summary: `${toolCall.name} failed: ${msg}`, navigationOccurred: false };
+    }
 
     // A tool that navigated (e.g. navigate) advances the page revision so any
     // in-flight confirmation or staleness check observes the change (MOMO-129).
@@ -379,7 +448,13 @@ export class AgentOrchestrator {
       const decision = await this.awaitConfirmation(toolCall, stepId, result);
       if (decision === 'confirm') {
         // Re-execute the exact confirmed action with a one-shot pre-auth grant.
-        result = await tool.execute(toolCall.arguments, { ...context, preAuthorized: true });
+        try {
+          result = await tool.execute(toolCall.arguments, { ...context, preAuthorized: true });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.error('[Orchestrator] Tool executor threw:', toolCall.name, msg);
+          result = { success: false, error: msg, summary: `${toolCall.name} failed: ${msg}`, navigationOccurred: false };
+        }
       } else if (decision === 'deny') {
         await this.abortTask('User denied confirmation');
         result = { success: false, error: 'User denied confirmation', summary: 'Confirmation denied', navigationOccurred: false };
@@ -432,6 +507,14 @@ export class AgentOrchestrator {
 
       const actionHash = this.hashAction(action);
 
+      // H10: a newer intervention supersedes the older pending one — the old
+      // promise can never be resolved by a now-stale panel message.
+      const previous = this.state.pendingHumanIntervention;
+      if (previous) {
+        if (previous.timerId) clearTimeout(previous.timerId);
+        previous.reject(new Error('Superseded by a newer intervention'));
+      }
+
       this.state.pendingHumanIntervention = {
         resolve,
         reject,
@@ -441,13 +524,13 @@ export class AgentOrchestrator {
       };
 
       // Auto-deny if the human doesn't respond within the timeout (MOMO-045).
-      setTimeout(() => {
-        if (this.state?.pendingHumanIntervention?.actionHash === actionHash) {
+      this.state.pendingHumanIntervention.timerId = setTimeout(() => {
+        if (this.state?.pendingHumanIntervention?.actionHash === actionHash && this.state.pendingHumanIntervention.stepId === stepId) {
           this.resolveIntervention('deny');
         }
       }, CONFIRMATION_TIMEOUT_MS);
 
-      chrome.runtime.sendMessage({
+      void chrome.runtime.sendMessage({
         type: 'HUMAN_INTERVENTION_REQUIRED',
         payload: {
           stepId,
@@ -455,7 +538,7 @@ export class AgentOrchestrator {
           pageRevision: this.state.pageRevision,
           ...payload,
         },
-      });
+      }).catch(() => {});
     });
   }
 
@@ -506,9 +589,9 @@ export class AgentOrchestrator {
 
     const pending = this.state.pendingHumanIntervention;
     // Bind the response to the exact action that requested confirmation (replay).
+    // M6: a mismatched hash is a duplicated/stale panel message — silently
+    // ignore it; it must never kill a live confirmation.
     if (response.actionHash !== pending.actionHash) {
-      pending.reject(new Error('Replayed human response'));
-      this.state.pendingHumanIntervention = null;
       return;
     }
     // The page must not have navigated since the confirmation was shown. Compare
@@ -526,6 +609,7 @@ export class AgentOrchestrator {
     const state = this.state;
     const pending = state?.pendingHumanIntervention;
     if (!state || !pending) return;
+    if (pending.timerId) clearTimeout(pending.timerId);
     state.pendingHumanIntervention = null;
     pending.resolve(decision);
   }
@@ -554,6 +638,13 @@ export class AgentOrchestrator {
     try {
       const tabId = await this.getActiveTabId();
       if (!tabId) return false;
+      let tabUrl: string | undefined;
+      try {
+        tabUrl = (await chrome.tabs.get(tabId)).url;
+      } catch {
+        return false;
+      }
+      if (!(await ensureHostPermission(tabUrl))) return false;
       const result = await chrome.scripting.executeScript({
         target: { tabId, allFrames: false },
         func: (sel: string) => !!document.querySelector(sel)?.checkVisibility(),
@@ -569,6 +660,13 @@ export class AgentOrchestrator {
     try {
       const tabId = await this.getActiveTabId();
       if (!tabId) return false;
+      let tabUrl: string | undefined;
+      try {
+        tabUrl = (await chrome.tabs.get(tabId)).url;
+      } catch {
+        return false;
+      }
+      if (!(await ensureHostPermission(tabUrl))) return false;
       const result = await chrome.scripting.executeScript({
         target: { tabId, allFrames: false },
         func: (sel: string) => !document.querySelector(sel)?.checkVisibility(),
@@ -584,6 +682,13 @@ export class AgentOrchestrator {
     try {
       const tabId = await this.getActiveTabId();
       if (!tabId) return false;
+      let tabUrl: string | undefined;
+      try {
+        tabUrl = (await chrome.tabs.get(tabId)).url;
+      } catch {
+        return false;
+      }
+      if (!(await ensureHostPermission(tabUrl))) return false;
       const result = await chrome.scripting.executeScript({
         target: { tabId, allFrames: false },
         func: (sel: string, txt: string) => document.querySelector(sel)?.textContent?.includes(txt) ?? false,
@@ -618,9 +723,13 @@ export class AgentOrchestrator {
     if (typeof step.onFailure === 'object' && step.onFailure.type === 'fallback') {
       const fallbackStepId = step.onFailure.stepId;
       const fallbackSteps = this.state?.plan?.contingencies.get(fallbackStepId);
-      if (fallbackSteps && this.state?.plan) {
-        this.state.plan.steps.splice(this.state.currentStep, 1, ...fallbackSteps);
+      if (!fallbackSteps || !this.state?.plan) {
+        // C7: a fallback action without the referenced contingency is an
+        // authoring error — surface it instead of silently continuing.
+        console.warn('[Orchestrator] Fallback steps missing for:', fallbackStepId);
+        return;
       }
+      this.state.plan.steps.splice(this.state.currentStep, 1, ...fallbackSteps);
       return;
     }
 
@@ -641,6 +750,10 @@ export class AgentOrchestrator {
         break;
       case 'abort':
         await this.abortTask(result.error || 'Aborted by failure action', true);
+        break;
+      default:
+        // C7: unknown or missing failure actions fail closed — abort.
+        await this.abortTask('Unknown failure action', true);
         break;
     }
   }
@@ -679,6 +792,14 @@ export class AgentOrchestrator {
   }
 
   async abortTask(reason: string, markError = false) {
+    // H10: settle any pending human intervention before anything else so its
+    // promise never hangs (and its auto-deny timer is cancelled).
+    if (this.state?.pendingHumanIntervention) {
+      const pending = this.state.pendingHumanIntervention;
+      this.state.pendingHumanIntervention = null;
+      if (pending.timerId) clearTimeout(pending.timerId);
+      pending.reject(new Error('Task aborted'));
+    }
     this.isRunning = false;
     this.abortController?.abort();
     if (this.state) {
@@ -687,7 +808,8 @@ export class AgentOrchestrator {
     }
     await this.detachCdpIfAttached();
     await this.persistState();
-    chrome.runtime.sendMessage({ type: 'TASK_ABORTED', payload: { reason } });
+    void chrome.runtime.sendMessage({ type: 'TASK_ABORTED', payload: { reason } }).catch(() => {});
+    this.broadcastUi('STATE_UPDATE', { state: this.sanitizeStateForUi() });
   }
 
   /**
@@ -697,6 +819,14 @@ export class AgentOrchestrator {
    * detach/persist may not finish before the worker is killed.
    */
   async suspend(): Promise<void> {
+    // H11: settle any pending human intervention first — its promise can never
+    // resolve once the worker is going away.
+    if (this.state?.pendingHumanIntervention) {
+      const pending = this.state.pendingHumanIntervention;
+      this.state.pendingHumanIntervention = null;
+      if (pending.timerId) clearTimeout(pending.timerId);
+      pending.reject(new Error('Service worker suspended'));
+    }
     const wasRunning = this.isRunning;
     this.isRunning = false;
     this.abortController?.abort();
@@ -746,7 +876,18 @@ export class AgentOrchestrator {
 
   /** Delete a persisted session and clear it from memory if it is active. */
   async deleteSession(sessionId: string): Promise<void> {
-    this.taskQueue.stopProcessing();
+    // H11: settle any pending human intervention before touching state.
+    if (this.state?.pendingHumanIntervention) {
+      const pending = this.state.pendingHumanIntervention;
+      this.state.pendingHumanIntervention = null;
+      if (pending.timerId) clearTimeout(pending.timerId);
+      pending.reject(new Error('Session deleted'));
+    }
+    // Only an active session owns the queue; deleting a non-active session must
+    // not disrupt processing for the live one.
+    if (sessionId === this.activeSessionId) {
+      this.taskQueue.stopProcessing();
+    }
     await this.persistence.deleteSession(sessionId);
     if (this.activeSessionId === sessionId) {
       this.activeSessionId = null;
@@ -762,7 +903,8 @@ export class AgentOrchestrator {
       this.state.status = 'completed';
       this.state.error = null;
     }
-    chrome.runtime.sendMessage({ type: 'TASK_COMPLETED', payload: { sessionId: this.activeSessionId } });
+    void chrome.runtime.sendMessage({ type: 'TASK_COMPLETED', payload: { sessionId: this.activeSessionId } }).catch(() => {});
+    this.broadcastUi('STATE_UPDATE', { state: this.sanitizeStateForUi() });
     await this.detachCdpIfAttached();
     await this.persistState();
   }
@@ -772,6 +914,11 @@ export class AgentOrchestrator {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const tab = tabs[0];
     if (!tab?.id) throw new Error('No active tab');
+    this.drivingTabId = tab.id ?? null;
+
+    if (!(await ensureHostPermission(tab.url))) {
+      return this.domCompressor.compress(null, tab.url || '', tab.title || '');
+    }
 
     // Best-effort AX tree acquisition. Both the executeScript injection and the
     // content-script message can fail on restricted pages (chrome://, a missing
@@ -806,26 +953,33 @@ export class AgentOrchestrator {
   // CDP attachment for AX tree extraction
   async attachCdpToActiveTab(): Promise<string | null> {
     try {
+      if (!(await ensureDebuggerPermission())) {
+        console.warn('[Orchestrator] debugger permission not granted; CDP disabled');
+        return null;
+      }
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
       const activeTab = tabs[0];
       if (!activeTab?.url) {
         console.log('[Orchestrator] No active tab');
         return null;
       }
+      this.drivingTabId = activeTab.id ?? null;
 
-      // Attach the debugger target that matches the *active* tab (by URL), not
-      // the first unattached page target, which may be a background tab.
+      // Attach the debugger target that matches the *active* tab, preferring
+      // the tabId binding (H12) and falling back to URL matching.
       const targets = await cdpAdapter.getTargets();
-      const target = targets.find(t => t.type === 'page' && t.url === activeTab.url);
+      const target = targets.find(t => t.type === 'page' && activeTab.id !== undefined && t.tabId === activeTab.id)
+        ?? targets.find(t => t.type === 'page' && t.url === activeTab.url);
       if (!target) {
         console.log('[Orchestrator] No CDP target for active tab:', activeTab.url);
         return null;
       }
 
       const sessionId = await cdpAdapter.attach(target.targetId);
+      this.cdpSessionTabId = activeTab.id ?? null;
 
       // Notify content script of CDP attachment
-      if (activeTab.id) {
+      if (activeTab.id && (await ensureHostPermission(activeTab.url))) {
         chrome.tabs.sendMessage(activeTab.id, {
           type: 'CDP_ATTACHED',
           payload: { sessionId }
@@ -846,11 +1000,12 @@ export class AgentOrchestrator {
     // re-attaches instead of reusing a stale session.
     if (this.cdpSessionId === sessionId) {
       this.cdpSessionId = null;
+      this.cdpSessionTabId = null;
     }
 
     // Notify content script
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tabs[0]?.id) {
+    if (tabs[0]?.id && (await ensureHostPermission(tabs[0].url))) {
       chrome.tabs.sendMessage(tabs[0].id!, { type: 'CDP_DETACHED' });
     }
   }
@@ -860,6 +1015,7 @@ export class AgentOrchestrator {
     const sessionId = this.cdpSessionId;
     if (!sessionId) return;
     this.cdpSessionId = null;
+    this.cdpSessionTabId = null;
     try {
       await this.detachCdp(sessionId);
     } catch (e) {
@@ -896,9 +1052,28 @@ export class AgentOrchestrator {
     await this.persistence.saveCheckpoint(this.activeSessionId!, checkpoint);
   }
 
+  /** UI-safe copy: strips closure-bearing fields and caps history size. */
+  private sanitizeStateForUi(): Record<string, unknown> | null {
+    if (!this.state) return null;
+    const { pendingHumanIntervention, history, ...rest } = this.state as AgentState & { pendingHumanIntervention: unknown };
+    return { ...rest, pendingHumanIntervention: null, history: history.slice(-50) };
+  }
+  private broadcastUi(type: string, payload: Record<string, unknown>) {
+    void chrome.runtime.sendMessage({ type, payload }).catch(() => {});
+  }
+
   async persistState() {
     if (!this.state || !this.activeSessionId) return;
     await this.persistence.saveSession(this.activeSessionId, this.state);
+    await this.persistence.saveSessionWorkingCopy(this.activeSessionId, this.state);
+    if (!this.inPersistBroadcast) {
+      this.inPersistBroadcast = true;
+      try {
+        this.broadcastUi('STATE_UPDATE', { state: this.sanitizeStateForUi() });
+      } finally {
+        this.inPersistBroadcast = false;
+      }
+    }
   }
 
   handleStorageChange(changes: Record<string, chrome.storage.StorageChange>) {
@@ -909,7 +1084,7 @@ export class AgentOrchestrator {
     if (tab.url && this.state) {
       // Only count navigation of the tab the agent is driving, so background
       // tab loads don't falsely invalidate an in-flight human confirmation.
-      if (tab.active) {
+      if (tabId === this.drivingTabId) {
         this.state.pageRevision++;
         // Navigation may invalidate the CDP target id — drop the cached session
         // so the next use re-attaches to the current target.
@@ -924,11 +1099,44 @@ export class AgentOrchestrator {
     }
   }
 
+  /** H13: The user switched to a different tab — drop the CDP session bound to
+   *  the previously driven tab so the next use re-attaches to the new one. */
+  handleTabActivated(): void {
+    if (this.cdpSessionId) {
+      const sid = this.cdpSessionId;
+      this.cdpSessionId = null;
+      this.cdpSessionTabId = null;
+      this.drivingTabId = null;
+      void this.detachCdp(sid).catch(e => console.error('[Orchestrator] CDP detach on tab switch failed:', e));
+    }
+  }
+
+  /** H13: The driven (or CDP-bound) tab was closed — clear the bindings and
+   *  detach so nothing reuses a stale session. */
+  handleTabRemoved(tabId: number): void {
+    if (tabId === this.drivingTabId || (this.cdpSessionTabId !== null && tabId === this.cdpSessionTabId)) {
+      this.drivingTabId = null;
+      if (this.cdpSessionId) {
+        const sid = this.cdpSessionId;
+        this.cdpSessionId = null;
+        this.cdpSessionTabId = null;
+        void this.detachCdp(sid).catch(() => {});
+      }
+    }
+  }
+
+  /** H22: Expose the tab bound to the live CDP session (used by the message
+   *  router to correlate CDP traffic with its tab). */
+  getCdpSessionTabId(): number | null {
+    return this.cdpSessionTabId;
+  }
+
   // Pause/resume functionality
-  pause() {
+  async pause() {
     if (this.state) {
       this.state.paused = true;
-      this.persistState();
+      await this.persistState();
+      this.broadcastUi('STATE_UPDATE', { state: this.sanitizeStateForUi() });
     }
   }
 
@@ -939,14 +1147,46 @@ export class AgentOrchestrator {
    * current `this.state` (BUG 6).
    */
   async resumeSession(sessionId: string): Promise<void> {
-    const session = await this.persistence.getSession(sessionId);
-    if (!session) {
-      throw new Error(`Session not found: ${sessionId}`);
+    if (this.isRunning) {
+      throw new Error('Agent already running — stop it before resuming another session');
     }
-    this.state = session;
+    // Same-lifetime pause → resume: keep the live in-memory state (fresher than
+    // any persisted snapshot); never replace it with a stale/redacted copy.
+    if (this.activeSessionId === sessionId && this.state) {
+      this.state.paused = false;
+      await this.persistState();
+      this.broadcastUi('STATE_UPDATE', { state: this.sanitizeStateForUi() });
+      return;
+    }
+    const session = await this.persistence.getSession(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    // Prefer the unredacted working copy (local resume artifact). If only the
+    // redacted public copy exists, refuse to auto-execute redacted arguments.
+    const working = await this.persistence.loadSessionWorkingCopy(sessionId);
+    const state = (working ?? session) as AgentState;
+    state.pendingHumanIntervention = null; // closures never survive persistence
+    this.state = state;
     this.activeSessionId = sessionId;
     this.state.paused = false;
-    await this.persistState();
+    if (this.state.plan && this.state.plan.steps.length > this.state.currentStep) {
+      if (!working) {
+        this.state.status = 'error';
+        this.state.error = 'Resume requires an unredacted working copy, which is unavailable';
+        await this.persistState();
+        this.broadcastUi('STATE_UPDATE', { state: this.sanitizeStateForUi() });
+        return;
+      }
+      this.state.status = 'running';
+      this.state.error = null;
+      this.isRunning = true;
+      this.abortController = new AbortController();
+      this.taskQueue.startProcessing(sessionId, this.taskProcessor.bind(this));
+      const token = ++this.runToken;
+      void this.runLoop(token).catch(e => { console.error('[Orchestrator] resumed runLoop crashed:', e); this.isRunning = false; });
+    } else {
+      await this.persistState();
+      this.broadcastUi('STATE_UPDATE', { state: this.sanitizeStateForUi() });
+    }
   }
 
   getState(): AgentState | null {

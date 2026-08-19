@@ -6,6 +6,7 @@ export class AlarmManager {
   private keepAliveAlarm = 'agent-keepalive';
   private checkpointAlarm = 'agent-checkpoint';
   private watchdogAlarm = 'agent-watchdog';
+  private inFlightAlarms = new Map<string, Promise<void>>();
 
   constructor(orchestrator: AgentOrchestrator) {
     this.orchestrator = orchestrator;
@@ -16,14 +17,15 @@ export class AlarmManager {
   }
 
   private async createAlarms() {
-    // Keep-alive: fires every minute to prevent SW suspension
-    await this.ensureAlarm(this.keepAliveAlarm, { periodInMinutes: 1 });
+    // Keep-alive: fires every 30s to prevent SW suspension (Chrome >= 120
+    // minimum period), falling back to 1 minute on older Chrome (min 118).
+    await this.ensureAlarm(this.keepAliveAlarm, { periodInMinutes: 0.5 }, { periodInMinutes: 1 });
 
     // Checkpoint: fires every 5 minutes to persist state
     await this.ensureAlarm(this.checkpointAlarm, { periodInMinutes: 5 });
 
-    // Watchdog: fires every 1 minute to check agent health (minimum per spec)
-    await this.ensureAlarm(this.watchdogAlarm, { periodInMinutes: 1 });
+    // Watchdog: fires every 30s to check agent health, falling back to 1 minute.
+    await this.ensureAlarm(this.watchdogAlarm, { periodInMinutes: 0.5 }, { periodInMinutes: 1 });
   }
 
   /**
@@ -32,11 +34,33 @@ export class AlarmManager {
    * unconditionally calling create would continually push the fire times back.
    * Only create an alarm when it is not already scheduled (MOMO-027).
    */
-  private async ensureAlarm(name: string, alarmInfo: chrome.alarms.AlarmCreateInfo): Promise<void> {
-    const existing = await chrome.alarms.get(name);
-    if (!existing) {
-      await chrome.alarms.create(name, alarmInfo);
-    }
+  private async ensureAlarm(
+    name: string,
+    alarmInfo: chrome.alarms.AlarmCreateInfo,
+    fallback?: chrome.alarms.AlarmCreateInfo,
+  ): Promise<void> {
+    const inFlight = this.inFlightAlarms.get(name);
+    if (inFlight) return inFlight;
+    const creation = (async () => {
+      try {
+        const existing = await chrome.alarms.get(name);
+        if (existing) return;
+        try {
+          await chrome.alarms.create(name, alarmInfo);
+        } catch (error) {
+          if (!fallback) throw error;
+          console.warn(
+            `[AlarmManager] Failed to create alarm ${name} with ${JSON.stringify(alarmInfo)}, falling back:`,
+            error,
+          );
+          await chrome.alarms.create(name, fallback);
+        }
+      } finally {
+        this.inFlightAlarms.delete(name);
+      }
+    })();
+    this.inFlightAlarms.set(name, creation);
+    return creation;
   }
 
   async handleAlarm(alarm: chrome.alarms.Alarm) {
@@ -81,6 +105,7 @@ export class AlarmManager {
   private async handleWatchdog() {
     const state = this.orchestrator.getState();
     if (!state) return;
+    if (state.paused) return;
 
     // Check if task is stuck (no progress for 2 minutes)
     const now = Date.now();

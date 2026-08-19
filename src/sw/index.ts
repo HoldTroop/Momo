@@ -11,31 +11,47 @@ const alarmManager = new AlarmManager(orchestrator);
 const portManager = new PortManager(orchestrator, messageRouter);
 
 let isInitialized = false;
+let initPromise: Promise<void> | null = null;
 
 async function initialize(attempt = 0) {
   if (isInitialized) return;
-
-  try {
-    await persistence.init();
-    await orchestrator.init();
-    alarmManager.start();
-    isInitialized = true;
-    console.log('[SW] Autonomous Agent initialized');
-  } catch (error) {
-    console.error('[SW] Initialization failed:', error);
-    // Retry with capped exponential backoff so a transient failure (e.g. a
-    // momentarily unavailable IndexedDB) doesn't leave the worker inert (MOMO-093).
-    const delay = Math.min(1000 * 2 ** attempt, 30_000);
-    setTimeout(() => void initialize(attempt + 1), delay);
-  }
+  if (initPromise) return initPromise;
+  initPromise = (async () => {
+    try {
+      await persistence.init();
+      await orchestrator.init();
+      alarmManager.start();
+      isInitialized = true;
+      console.log('[SW] Autonomous Agent initialized');
+      void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((err) => {
+        console.warn('[SW] setPanelBehavior failed:', err);
+      });
+    } catch (error) {
+      console.error('[SW] Initialization failed:', error);
+      // Alarm-based retry: setTimeout dies with the worker; chrome.alarms persists.
+      const delay = Math.min(0.5 + attempt * 0.5, 2); // minutes, capped
+      try {
+        await chrome.alarms.create('agent-init-retry', { delayInMinutes: delay });
+      } catch (e) {
+        console.error('[SW] Failed to schedule init retry:', e);
+      }
+    } finally {
+      initPromise = null;
+    }
+  })();
+  return initPromise;
 }
 
 chrome.runtime.onStartup.addListener(() => void initialize());
 chrome.runtime.onInstalled.addListener(async (details) => {
-  if (details.reason === 'install') {
-    await persistence.init();
-  } else if (details.reason === 'update') {
-    await persistence.migrate(details.previousVersion);
+  try {
+    if (details.reason === 'install') {
+      await persistence.init();
+    } else if (details.reason === 'update') {
+      await persistence.migrate(details.previousVersion);
+    }
+  } catch (error) {
+    console.error('[SW] onInstalled migration failed:', error);
   }
   await initialize();
 });
@@ -80,13 +96,16 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 });
 
-chrome.runtime.onSuspend.addListener(() => {
-  console.log('[SW] Suspending, aborting task and detaching CDP...');
-  orchestrator.suspend();
+chrome.tabs.onActivated.addListener(() => {
+  orchestrator.handleTabActivated();
 });
 
-self.addEventListener('beforeunload', () => {
-  orchestrator.suspend();
+chrome.tabs.onRemoved.addListener((tabId) => {
+  orchestrator.handleTabRemoved(tabId);
+});
+
+chrome.runtime.onSuspend.addListener(() => {
+  void orchestrator.suspend().catch((err) => console.error('[SW] Suspend cleanup failed:', err));
 });
 
 initialize();

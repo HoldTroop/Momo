@@ -202,6 +202,7 @@ export class MessageRouter {
     this.handlers.set('GET_DOM_SNAPSHOT', this.handleGetDomSnapshot.bind(this));
     this.handlers.set('HUMAN_RESPONSE', this.handleHumanResponse.bind(this));
     this.handlers.set('GET_SESSIONS', this.handleGetSessions.bind(this));
+    this.handlers.set('PERSIST_STATE', this.handlePersistState.bind(this));
     this.handlers.set('DELETE_SESSION', this.handleDeleteSession.bind(this));
     this.handlers.set('CDP_COMMAND', this.handleCdpCommand.bind(this));
     this.handlers.set('CDP_ATTACH_REQUEST', this.handleCdpAttachRequest.bind(this));
@@ -266,7 +267,7 @@ export class MessageRouter {
   }
 
   private async handlePauseTask() {
-    this.orchestrator.pause();
+    await this.orchestrator.pause();
     return { success: true };
   }
 
@@ -324,13 +325,18 @@ export class MessageRouter {
     return { success: true };
   }
 
-  private async handleCdpCommand(payload: unknown) {
+  private async handleCdpCommand(payload: unknown, sender: chrome.runtime.MessageSender | undefined) {
     const { domain, command, params, sessionId } = payload as {
       domain: string;
       command: string;
       params: Record<string, unknown>;
       sessionId: string;
     };
+
+    const cdpSessionTabId = this.orchestrator.getCdpSessionTabId();
+    if (cdpSessionTabId !== null && sender?.tab?.id !== cdpSessionTabId) {
+      return { error: 'CDP command from untracked tab' };
+    }
 
     // Only the read-only commands the content-script AX extraction needs may be
     // forwarded; arbitrary debugger commands (e.g. Runtime.evaluate, Input.*,
@@ -350,7 +356,14 @@ export class MessageRouter {
     }
   }
 
-  private async handleCdpAttachRequest(payload: unknown) {
+  private async handleCdpAttachRequest(payload: unknown, sender: chrome.runtime.MessageSender | undefined) {
+    if (!sender?.tab?.id) {
+      return { error: 'CDP attach requires a tab sender' };
+    }
+    const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (sender.tab.id !== tabs[0]?.id) {
+      return { error: 'CDP attach allowed only from the active tab' };
+    }
     // Extension requests CDP attachment - handled by chrome.debugger
     try {
       const sessionId = await this.orchestrator.attachCdpToActiveTab();

@@ -34,11 +34,17 @@ interface CheckpointRecord {
   timestamp: number;
 }
 
+interface SessionWorkingRecord {
+  sessionId: string;
+  state: string;
+  updatedAt: number;
+}
+
 interface TaskRecord {
   id: string;
   sessionId: string;
   type: string;
-  payload: unknown;
+  payload: SuperJSONResult;
   priority: number;
   deadline: number;
   retryPolicy: unknown;
@@ -95,6 +101,10 @@ class PersistenceManager {
       await trans.table('checkpoints').clear();
     });
 
+    this.db.version(4).stores({
+      sessionWorking: '&sessionId, updatedAt',
+    });
+
     await this.db.open();
     this.initialized = true;
     console.log('[Persistence] Initialized');
@@ -140,12 +150,37 @@ class PersistenceManager {
     // (which may still be issuing its put) skips the re-insert (MOMO-114).
     this.deletedSessions.add(sessionId);
 
-    await this.db.transaction('rw', this.db.sessions, this.db.wal, this.db.checkpoints, this.db.tasks, async () => {
+    await this.db.transaction('rw', this.db.sessions, this.db.wal, this.db.checkpoints, this.db.tasks, this.db.sessionWorking, async () => {
       await this.db.sessions.delete(sessionId);
       await this.db.wal.where('sessionId').equals(sessionId).delete();
       await this.db.checkpoints.where('sessionId').equals(sessionId).delete();
       await this.db.tasks.where('sessionId').equals(sessionId).delete();
+      await this.db.sessionWorking.delete(sessionId);
     });
+  }
+
+  async saveSessionWorkingCopy(sessionId: string, state: unknown): Promise<void> {
+    if (!this.initialized) await this.init();
+
+    const sanitized = this.sanitizeForSerialization(state);
+    await this.db.sessionWorking.put({
+      sessionId,
+      state: SuperJSON.serialize(sanitized),
+      updatedAt: Date.now(),
+    });
+  }
+
+  async loadSessionWorkingCopy(sessionId: string): Promise<unknown | null> {
+    if (!this.initialized) await this.init();
+
+    const row = await this.db.sessionWorking.get(sessionId);
+    if (!row) return null;
+    try {
+      return SuperJSON.deserialize(row.state);
+    } catch (e) {
+      console.warn('[Persistence] Failed to deserialize working copy:', e);
+      return null;
+    }
   }
 
   async appendWal(sessionId: string, entry: Omit<WalEntry, 'id'>): Promise<number> {

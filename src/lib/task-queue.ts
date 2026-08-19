@@ -59,22 +59,34 @@ export class TaskQueue {
   }
 
   private async processNext(sessionId: string, processor: (entry: TaskQueueEntry) => Promise<void>) {
-    const entry = await this.persistence.getNextPendingTask(sessionId);
-    if (!entry) return;
-
-    entry.attempts += 1;
-    await this.persistence.updateTask(entry.id, { status: 'running', attempts: entry.attempts });
-
+    if (this.inFlight) return;
+    this.inFlight = true;
     try {
-      await processor(entry);
-      await this.persistence.updateTask(entry.id, { status: 'done' });
-    } catch (error) {
-      await this.handleFailure(entry, error);
+      const entry = await this.persistence.getNextPendingTask(sessionId);
+      if (!entry) return;
+
+      entry.attempts += 1;
+      await this.persistence.updateTask(entry.id, { status: 'running', attempts: entry.attempts });
+
+      const keepalive = setInterval(() => {
+        void this.persistence.updateTask(entry.id, { status: 'running' });
+      }, 30_000);
+
+      try {
+        await processor(entry);
+        await this.persistence.updateTask(entry.id, { status: 'done' });
+      } catch (error) {
+        await this.handleFailure(entry, error);
+      } finally {
+        clearInterval(keepalive);
+      }
+    } finally {
+      this.inFlight = false;
     }
   }
 
   private async handleFailure(entry: TaskQueueEntry, error: unknown) {
-    const retryPolicy = entry.retryPolicy as RetryPolicy;
+    const retryPolicy = (entry.retryPolicy as RetryPolicy | undefined) ?? this.createDefaultRetryPolicy();
     const isRetryable = retryPolicy.retryableErrors.some(e =>
       error instanceof Error && error.message.includes(e)
     );
