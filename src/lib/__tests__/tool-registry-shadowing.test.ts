@@ -260,10 +260,10 @@ describe('human_type fieldIsSensitive preservation (INTEGRATION)', () => {
     })).toBe(false);
   });
 
-  it('verifies the structural fix in tool-registry.ts', () => {
+  it('verifies the structural fix in human-type.ts', () => {
     // Verify the fix by reading the actual source code
     const source = fs.readFileSync(
-      path.join(import.meta.dirname, '../tool-registry.ts'),
+      path.join(import.meta.dirname, '../tools/human-type.ts'),
       'utf-8'
     );
 
@@ -271,12 +271,11 @@ describe('human_type fieldIsSensitive preservation (INTEGRATION)', () => {
     const humanTypeIdx = source.indexOf("name: 'human_type'");
     expect(humanTypeIdx).toBeGreaterThan(0);
 
-    // Extract the execute function body
+    // Extract the execute function body (single-tool module: slice to EOF)
     const executeIdx = source.indexOf('execute: async (args, context) => {', humanTypeIdx);
     expect(executeIdx).toBeGreaterThan(humanTypeIdx);
-    
-    const nextToolIdx = source.indexOf('this.register({', executeIdx + 100);
-    const executeBody = source.slice(executeIdx, nextToolIdx > 0 ? nextToolIdx : executeIdx + 3000);
+
+    const executeBody = source.slice(executeIdx);
 
     // Verify: "let fieldIsSensitive: boolean;" appears early (outer scope)
     expect(executeBody).toContain('let fieldIsSensitive: boolean;');

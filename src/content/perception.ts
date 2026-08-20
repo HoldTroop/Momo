@@ -288,18 +288,10 @@ export function resolveByRefStrict(ref: string): RefResolution {
 // Initialize perception on load
 console.log('[Perception] Module loaded');
 
-// Expose globally for tool-registry to call
-declare global {
-  interface Window {
-    __perceptionExtract: (includeMarkdown: boolean) => PerceptionResult;
-    __perceptionFindByRefId: (refId: string) => HTMLElement | null;
-    __perceptionResolveSelector: (selector: string) => { x: number; y: number; element: HTMLElement } | null;
-    __perceptionResolveTarget: (refId: string | undefined, selector: string | undefined) => { x: number; y: number; element: HTMLElement } | null;
-    __perceptionGetInteractiveElements: () => InteractiveElementsResult;
-    __perceptionResolveByRefStrict: (ref: string) => RefResolution;
-  }
-}
-
+// Expose globally for the tool layer to call. The `Window` typing for these
+// globals lives in src/globals.d.ts (a dedicated ambient module), so the
+// augmentation is visible project-wide rather than only where this content
+// script is included.
 window.__perceptionExtract = extractPerception;
 window.__perceptionFindByRefId = findByRefId;
 window.__perceptionResolveSelector = resolveSelector;

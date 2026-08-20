@@ -135,7 +135,6 @@ export class MessageRouter {
     const results = await chrome.scripting.executeScript({
       target: { tabId, allFrames: false },
       func: () => {
-        // @ts-ignore - perception module is injected as a content script
         return window.__perceptionExtract?.(true) ?? null;
       },
     });
@@ -163,7 +162,6 @@ export class MessageRouter {
     const results = await chrome.scripting.executeScript({
       target: { tabId, allFrames: false },
       func: () => {
-        // @ts-ignore - perception module is injected as a content script
         return window.__perceptionGetInteractiveElements?.() ?? null;
       },
     });

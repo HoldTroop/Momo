@@ -5,10 +5,11 @@ import { redactText, redactValue } from '../lib/redaction.js';
 import { TaskQueue } from '../lib/task-queue.js';
 import { cdpAdapter } from './cdp-adapter.js';
 import { getWsClient } from './ws-client.js';
-import { ensureDebuggerPermission, ensureHostPermission } from '../lib/permissions.js';
+import { ensureHostPermission } from '../lib/permissions.js';
+import * as confirmation from './confirmation.js';
+import * as cdpLifecycle from './cdp-lifecycle.js';
+import { CHECKPOINT_INTERVAL, createCheckpoint } from './checkpoint.js';
 
-/** How long to wait for a human confirmation before auto-denying (MOMO-045). */
-const CONFIRMATION_TIMEOUT_MS = 60_000;
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_BACKOFF_BASE_MS = 1_000;
 const RETRY_BACKOFF_MAX_MS = 10_000;
@@ -173,9 +174,7 @@ export class AgentOrchestrator {
   private isRunning = false;
   private runToken = 0;
   private abortController: AbortController | null = null;
-  private cdpSessionId: string | null = null;
-  private drivingTabId: number | null = null;
-  private cdpSessionTabId: number | null = null;
+  private cdpBindings: cdpLifecycle.CdpBindings = cdpLifecycle.createCdpBindings();
   private inPersistBroadcast = false;
 
   constructor(persistence: PersistenceManager) {
@@ -188,8 +187,8 @@ export class AgentOrchestrator {
     // drop the cached session id so the next use re-attaches instead of reusing
     // a stale session (MOMO-038/050).
     cdpAdapter.onSessionDetached((sessionId) => {
-      if (this.cdpSessionId === sessionId) {
-        this.cdpSessionId = null;
+      if (this.cdpBindings.sessionId === sessionId) {
+        this.cdpBindings.sessionId = null;
       }
     });
   }
@@ -484,9 +483,9 @@ export class AgentOrchestrator {
 
   /** Attach (once) to the active tab via chrome.debugger and reuse the session. */
   async getOrCreateCdpSession(): Promise<string | null> {
-    if (this.cdpSessionId) return this.cdpSessionId;
-    this.cdpSessionId = await this.attachCdpToActiveTab();
-    return this.cdpSessionId;
+    if (this.cdpBindings.sessionId) return this.cdpBindings.sessionId;
+    this.cdpBindings.sessionId = await cdpLifecycle.attachCdpToActiveTab(this.cdpBindings);
+    return this.cdpBindings.sessionId;
   }
 
   /**
@@ -499,119 +498,19 @@ export class AgentOrchestrator {
     action: ToolCall,
     payload: Record<string, unknown>,
   ): Promise<'confirm' | 'deny' | 'takeover'> {
-    return new Promise((resolve, reject) => {
-      if (!this.state) {
-        reject(new Error('No active state'));
-        return;
-      }
-
-      const actionHash = this.hashAction(action);
-
-      // H10: a newer intervention supersedes the older pending one — the old
-      // promise can never be resolved by a now-stale panel message.
-      const previous = this.state.pendingHumanIntervention;
-      if (previous) {
-        if (previous.timerId) clearTimeout(previous.timerId);
-        previous.reject(new Error('Superseded by a newer intervention'));
-      }
-
-      this.state.pendingHumanIntervention = {
-        resolve,
-        reject,
-        stepId,
-        actionHash,
-        pageRevision: this.state.pageRevision,
-      };
-
-      // Auto-deny if the human doesn't respond within the timeout (MOMO-045).
-      this.state.pendingHumanIntervention.timerId = setTimeout(() => {
-        if (this.state?.pendingHumanIntervention?.actionHash === actionHash && this.state.pendingHumanIntervention.stepId === stepId) {
-          this.resolveIntervention('deny');
-        }
-      }, CONFIRMATION_TIMEOUT_MS);
-
-      void chrome.runtime.sendMessage({
-        type: 'HUMAN_INTERVENTION_REQUIRED',
-        payload: {
-          stepId,
-          actionHash,
-          pageRevision: this.state.pageRevision,
-          ...payload,
-        },
-      }).catch((err) => console.warn('[Momo] Handled error:', err));
-    });
+    return confirmation.requestIntervention(this.state, stepId, action, payload);
   }
 
   private awaitConfirmation(action: ToolCall, stepId: string, result: ToolResult): Promise<'confirm' | 'deny' | 'takeover'> {
-    const confirmationData = result.confirmationData;
-    if (!confirmationData) {
-      throw new Error('Confirmation requested without confirmation data');
-    }
-
-    return this.requestIntervention(stepId, action, {
-      origin: confirmationData.origin,
-      action: action.name,
-      target: confirmationData.target,
-      // Use the tool's redacted confirmation payload, not the raw arguments
-      // (which may include typed text) — MOMO-041.
-      data: confirmationData.data,
-      reversible: confirmationData.reversible,
-      riskClass: confirmationData.riskClass,
-    });
-  }
-
-  private hashAction(action: ToolCall): string {
-    // Simple hash for binding confirmation to specific action
-    const str = JSON.stringify(action);
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      hash = ((hash << 5) - hash) + str.charCodeAt(i);
-      hash |= 0;
-    }
-    return hash.toString(16);
+    return confirmation.awaitConfirmation(this.state, action, stepId, result);
   }
 
   private async getCurrentOrigin(): Promise<string> {
-    try {
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      const url = tabs[0]?.url;
-      if (!url) return 'unknown';
-      const origin = new URL(url).origin;
-      // `chrome://`, `about:blank`, etc. report origin `'null'` — treat as unknown.
-      return origin && origin !== 'null' ? origin : 'unknown';
-    } catch {
-      return 'unknown';
-    }
+    return confirmation.getCurrentOrigin();
   }
 
-  async handleHumanResponse(response: HumanResponse) {
-    if (!this.state?.pendingHumanIntervention) return;
-
-    const pending = this.state.pendingHumanIntervention;
-    // Bind the response to the exact action that requested confirmation (replay).
-    // M6: a mismatched hash is a duplicated/stale panel message — silently
-    // ignore it; it must never kill a live confirmation.
-    if (response.actionHash !== pending.actionHash) {
-      return;
-    }
-    // The page must not have navigated since the confirmation was shown. Compare
-    // the echoed revision against the *current* one, not the captured one.
-    if (response.pageRevision !== this.state.pageRevision) {
-      pending.reject(new Error('Stale human response: page changed'));
-      this.state.pendingHumanIntervention = null;
-      return;
-    }
-
-    this.resolveIntervention(response.action);
-  }
-
-  private resolveIntervention(decision: 'confirm' | 'deny' | 'takeover') {
-    const state = this.state;
-    const pending = state?.pendingHumanIntervention;
-    if (!state || !pending) return;
-    if (pending.timerId) clearTimeout(pending.timerId);
-    state.pendingHumanIntervention = null;
-    pending.resolve(decision);
+  async handleHumanResponse(response: HumanResponse): Promise<void> {
+    confirmation.handleHumanResponse(this.state, response);
   }
 
   private async verifyStep(step: PlanStep, result: ToolResult): Promise<boolean> {
@@ -701,8 +600,7 @@ export class AgentOrchestrator {
   }
 
   private async getActiveTabId(): Promise<number | null> {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    return tabs[0]?.id ?? null;
+    return cdpLifecycle.getActiveTabId();
   }
 
   private async checkUrlMatches(pattern: string): Promise<boolean> {
@@ -838,8 +736,8 @@ export class AgentOrchestrator {
       this.state.error = 'Service worker suspended mid-task';
     }
 
-    const sessionId = this.cdpSessionId;
-    this.cdpSessionId = null;
+    const sessionId = this.cdpBindings.sessionId;
+    this.cdpBindings.sessionId = null;
 
     if (sessionId) {
       try {
@@ -914,7 +812,7 @@ export class AgentOrchestrator {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const tab = tabs[0];
     if (!tab?.id) throw new Error('No active tab');
-    this.drivingTabId = tab.id ?? null;
+    this.cdpBindings.drivingTabId = tab.id ?? null;
 
     if (!(await ensureHostPermission(tab.url))) {
       return this.domCompressor.compress(null, tab.url || '', tab.title || '');
@@ -952,104 +850,23 @@ export class AgentOrchestrator {
 
   // CDP attachment for AX tree extraction
   async attachCdpToActiveTab(): Promise<string | null> {
-    try {
-      if (!(await ensureDebuggerPermission())) {
-        console.warn('[Orchestrator] debugger permission not granted; CDP disabled');
-        return null;
-      }
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      const activeTab = tabs[0];
-      if (!activeTab?.url) {
-        console.log('[Orchestrator] No active tab');
-        return null;
-      }
-      this.drivingTabId = activeTab.id ?? null;
-
-      // Attach the debugger target that matches the *active* tab, preferring
-      // the tabId binding (H12) and falling back to URL matching.
-      const targets = await cdpAdapter.getTargets();
-      const target = targets.find(t => t.type === 'page' && activeTab.id !== undefined && t.tabId === activeTab.id)
-        ?? targets.find(t => t.type === 'page' && t.url === activeTab.url);
-      if (!target) {
-        console.log('[Orchestrator] No CDP target for active tab:', activeTab.url);
-        return null;
-      }
-
-      const sessionId = await cdpAdapter.attach(target.targetId);
-      this.cdpSessionTabId = activeTab.id ?? null;
-
-      // Notify content script of CDP attachment
-      if (activeTab.id && (await ensureHostPermission(activeTab.url))) {
-        chrome.tabs.sendMessage(activeTab.id, {
-          type: 'CDP_ATTACHED',
-          payload: { sessionId }
-        });
-      }
-
-      return sessionId;
-    } catch (e) {
-      console.error('[Orchestrator] CDP attach failed:', e);
-      return null;
-    }
+    return cdpLifecycle.attachCdpToActiveTab(this.cdpBindings);
   }
 
   async detachCdp(sessionId: string): Promise<void> {
-    await cdpAdapter.detach(sessionId);
-
-    // Invalidate the cached session id so a subsequent getOrCreateCdpSession
-    // re-attaches instead of reusing a stale session.
-    if (this.cdpSessionId === sessionId) {
-      this.cdpSessionId = null;
-      this.cdpSessionTabId = null;
-    }
-
-    // Notify content script
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tabs[0]?.id && (await ensureHostPermission(tabs[0].url))) {
-      chrome.tabs.sendMessage(tabs[0].id!, { type: 'CDP_DETACHED' });
-    }
+    await cdpLifecycle.detachCdp(this.cdpBindings, sessionId);
   }
 
   /** Detach any active CDP session, tolerating failure (e.g. already detached). */
   private async detachCdpIfAttached(): Promise<void> {
-    const sessionId = this.cdpSessionId;
-    if (!sessionId) return;
-    this.cdpSessionId = null;
-    this.cdpSessionTabId = null;
-    try {
-      await this.detachCdp(sessionId);
-    } catch (e) {
-      console.error('[Orchestrator] CDP detach failed:', e);
-    }
+    await cdpLifecycle.detachCdpIfAttached(this.cdpBindings);
   }
 
   private async maybeCheckpoint() {
     if (!this.state) return;
-
-    const CHECKPOINT_INTERVAL = 5;
     if (this.state.currentStep % CHECKPOINT_INTERVAL === 0) {
-      await this.createCheckpoint();
+      await createCheckpoint(this.state, this.persistence, this.activeSessionId!);
     }
-  }
-
-  private async createCheckpoint() {
-    if (!this.state) return;
-
-    const checkpoint: Checkpoint = {
-      stepIndex: this.state.currentStep,
-      stateSnapshot: {
-        goal: this.state.goal,
-        currentStep: this.state.currentStep,
-        variables: this.state.variables,
-        historyLength: this.state.history.length,
-        pageRevision: this.state.pageRevision,
-      },
-      walPosition: await this.persistence.getWalPosition(),
-      timestamp: Date.now(),
-    };
-
-    this.state.checkpoints.push(checkpoint);
-    await this.persistence.saveCheckpoint(this.activeSessionId!, checkpoint);
   }
 
   /** UI-safe copy: strips closure-bearing fields and caps history size. */
@@ -1081,54 +898,25 @@ export class AgentOrchestrator {
   }
 
   handleTabUpdate(tabId: number, tab: chrome.tabs.Tab) {
-    if (tab.url && this.state) {
-      // Only count navigation of the tab the agent is driving, so background
-      // tab loads don't falsely invalidate an in-flight human confirmation.
-      if (tabId === this.drivingTabId) {
-        this.state.pageRevision++;
-        // Navigation may invalidate the CDP target id — drop the cached session
-        // so the next use re-attaches to the current target.
-        if (this.cdpSessionId) {
-          const sid = this.cdpSessionId;
-          this.cdpSessionId = null;
-          void this.detachCdp(sid).catch(e => {
-            console.error('[Orchestrator] CDP detach after navigation failed:', e);
-          });
-        }
-      }
-    }
+    cdpLifecycle.handleTabUpdate(this.cdpBindings, this.state, tabId, tab);
   }
 
   /** H13: The user switched to a different tab — drop the CDP session bound to
    *  the previously driven tab so the next use re-attaches to the new one. */
   handleTabActivated(): void {
-    if (this.cdpSessionId) {
-      const sid = this.cdpSessionId;
-      this.cdpSessionId = null;
-      this.cdpSessionTabId = null;
-      this.drivingTabId = null;
-      void this.detachCdp(sid).catch(e => console.error('[Orchestrator] CDP detach on tab switch failed:', e));
-    }
+    cdpLifecycle.handleTabActivated(this.cdpBindings);
   }
 
   /** H13: The driven (or CDP-bound) tab was closed — clear the bindings and
    *  detach so nothing reuses a stale session. */
   handleTabRemoved(tabId: number): void {
-    if (tabId === this.drivingTabId || (this.cdpSessionTabId !== null && tabId === this.cdpSessionTabId)) {
-      this.drivingTabId = null;
-      if (this.cdpSessionId) {
-        const sid = this.cdpSessionId;
-        this.cdpSessionId = null;
-        this.cdpSessionTabId = null;
-        void this.detachCdp(sid).catch((err) => console.warn('[Momo] Handled error:', err));
-      }
-    }
+    cdpLifecycle.handleTabRemoved(this.cdpBindings, tabId);
   }
 
   /** H22: Expose the tab bound to the live CDP session (used by the message
    *  router to correlate CDP traffic with its tab). */
   getCdpSessionTabId(): number | null {
-    return this.cdpSessionTabId;
+    return cdpLifecycle.getCdpSessionTabId(this.cdpBindings);
   }
 
   // Pause/resume functionality
