@@ -1,0 +1,56 @@
+name: CI
+
+# Quality gates that run on every pull request targeting main.
+# Keeps the "review before merge" gate the project already uses: a PR must
+# pass lint + typecheck + tests (TS) and `cargo check` (Rust bridge) before
+# it can land.
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Extension (lint, typecheck, test)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Test
+        run: npm test
+
+  bridge:
+    name: Bridge (cargo check)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo check
+        working-directory: bridge
+        run: cargo check

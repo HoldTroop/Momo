@@ -125,7 +125,7 @@ class DomObserver {
     chrome.runtime.sendMessage({
       type: 'DOM_CHANGES',
       payload: { changes },
-    }).catch(() => {}); // Ignore if SW not ready
+    }).catch((err) => console.warn('[Momo] Handled error:', err)); // SW may not be ready yet
   }
 
   private handleMessage(message: any, sender: chrome.runtime.MessageSender, sendResponse: (response: any) => void) {
@@ -139,7 +139,7 @@ class DomObserver {
           chrome.runtime.sendMessage({
             type: 'DOM_CHANGES_CALLBACK',
             payload: { callbackId, changes },
-          }).catch(() => {});
+          }).catch((err) => console.warn('[Momo] Handled error:', err));
         };
         this.callbacks.add(callback);
         sendResponse({ callbackId });

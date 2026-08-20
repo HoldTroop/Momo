@@ -66,7 +66,7 @@ export class MessageRouter {
 
   private handleBridgeEvent(event: BridgeEvent) {
     // Forward async events (policy_changed, audit_log_append, etc.) to side panel
-    void chrome.runtime.sendMessage({ type: 'BRIDGE_EVENT', payload: event }).catch(() => {});
+    void chrome.runtime.sendMessage({ type: 'BRIDGE_EVENT', payload: event }).catch((err) => console.warn('[Momo] Handled error:', err));
   }
 
   /** Dispatch a bridge → extension command and reply with a `CommandResult`.

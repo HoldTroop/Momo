@@ -105,7 +105,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    chrome.storage.local.get('bridgeToken').then((v) => { if (typeof v?.bridgeToken === 'string') setBridgeToken(v.bridgeToken); }).catch(() => {});
+    chrome.storage.local.get('bridgeToken').then((v) => { if (typeof v?.bridgeToken === 'string') setBridgeToken(v.bridgeToken); }).catch((err) => console.warn('[Momo] Handled error:', err));
   }, []);
 
   useEffect(() => {
@@ -278,7 +278,7 @@ function App() {
     if (portRef.current) {
       portRef.current.postMessage({ type: 'STOP_TASK', payload: {} });
     } else {
-      chrome.runtime.sendMessage({ type: 'STOP_TASK', payload: {} }).catch(() => {});
+      chrome.runtime.sendMessage({ type: 'STOP_TASK', payload: {} }).catch((err) => console.warn('[Momo] Handled error:', err));
     }
   };
 
@@ -286,7 +286,7 @@ function App() {
     if (portRef.current) {
       portRef.current.postMessage({ type: 'STOP_TASK', payload: {} });
     } else {
-      chrome.runtime.sendMessage({ type: 'STOP_TASK', payload: {} }).catch(() => {});
+      chrome.runtime.sendMessage({ type: 'STOP_TASK', payload: {} }).catch((err) => console.warn('[Momo] Handled error:', err));
     }
     setSessionId(null);
     setMessages([]);

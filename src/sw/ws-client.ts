@@ -129,10 +129,7 @@ export class WsClient {
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      this.tryConnect().catch(() => {
-        // tryConnect routes failures to scheduleReconnect (via onclose or a
-        // failed discovery), so this catch is only a safety net.
-      });
+      this.tryConnect().catch((err) => console.warn('[Momo] Handled error:', err));
     }, delay);
   }
 

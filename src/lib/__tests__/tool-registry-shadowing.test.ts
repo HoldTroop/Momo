@@ -14,6 +14,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ToolRegistry } from '../tool-registry';
 import { isSensitiveInput } from '../redaction';
+import fs from 'node:fs';
+import path from 'node:path';
 
 // Capture authorization payloads for assertion
 let capturedAuthPayload: any = null;
@@ -120,7 +122,7 @@ describe('human_type fieldIsSensitive preservation (INTEGRATION)', () => {
 
     // Verify the ref_id-derived password field was correctly identified
     expect(mockExecuteScript).toHaveBeenCalledTimes(1);
-    const firstCall = mockExecuteScript.mock.calls[0][0];
+    const firstCall = mockExecuteScript.mock.calls[0]![0];
     expect(firstCall.args).toEqual(['password_field_ref']);
   });
 
@@ -260,10 +262,8 @@ describe('human_type fieldIsSensitive preservation (INTEGRATION)', () => {
 
   it('verifies the structural fix in tool-registry.ts', () => {
     // Verify the fix by reading the actual source code
-    const fs = require('fs');
-    const path = require('path');
     const source = fs.readFileSync(
-      path.join(__dirname, '../tool-registry.ts'),
+      path.join(import.meta.dirname, '../tool-registry.ts'),
       'utf-8'
     );
 

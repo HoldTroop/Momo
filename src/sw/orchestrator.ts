@@ -538,7 +538,7 @@ export class AgentOrchestrator {
           pageRevision: this.state.pageRevision,
           ...payload,
         },
-      }).catch(() => {});
+      }).catch((err) => console.warn('[Momo] Handled error:', err));
     });
   }
 
@@ -808,7 +808,7 @@ export class AgentOrchestrator {
     }
     await this.detachCdpIfAttached();
     await this.persistState();
-    void chrome.runtime.sendMessage({ type: 'TASK_ABORTED', payload: { reason } }).catch(() => {});
+    void chrome.runtime.sendMessage({ type: 'TASK_ABORTED', payload: { reason } }).catch((err) => console.warn('[Momo] Handled error:', err));
     this.broadcastUi('STATE_UPDATE', { state: this.sanitizeStateForUi() });
   }
 
@@ -903,7 +903,7 @@ export class AgentOrchestrator {
       this.state.status = 'completed';
       this.state.error = null;
     }
-    void chrome.runtime.sendMessage({ type: 'TASK_COMPLETED', payload: { sessionId: this.activeSessionId } }).catch(() => {});
+    void chrome.runtime.sendMessage({ type: 'TASK_COMPLETED', payload: { sessionId: this.activeSessionId } }).catch((err) => console.warn('[Momo] Handled error:', err));
     this.broadcastUi('STATE_UPDATE', { state: this.sanitizeStateForUi() });
     await this.detachCdpIfAttached();
     await this.persistState();
@@ -1059,7 +1059,7 @@ export class AgentOrchestrator {
     return { ...rest, pendingHumanIntervention: null, history: history.slice(-50) };
   }
   private broadcastUi(type: string, payload: Record<string, unknown>) {
-    void chrome.runtime.sendMessage({ type, payload }).catch(() => {});
+    void chrome.runtime.sendMessage({ type, payload }).catch((err) => console.warn('[Momo] Handled error:', err));
   }
 
   async persistState() {
@@ -1120,7 +1120,7 @@ export class AgentOrchestrator {
         const sid = this.cdpSessionId;
         this.cdpSessionId = null;
         this.cdpSessionTabId = null;
-        void this.detachCdp(sid).catch(() => {});
+        void this.detachCdp(sid).catch((err) => console.warn('[Momo] Handled error:', err));
       }
     }
   }
