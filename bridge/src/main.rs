@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use axum::{routing::get, Router};
 use dirs;
-use md5::{Digest, Md5};
+use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tracing::{debug, error, info, warn};
@@ -129,7 +129,7 @@ impl BridgeServer {
     pub(crate) async fn authorize(&self, request: PolicyRequest) -> Result<serde_json::Value> {
         // Hash and audit-entry shaping are CPU-only and stay async-side; the
         // DB-touching evaluate/log_audit pair runs inside spawn_blocking.
-        let action_hash = format!("{:x}", Md5::digest(serde_json::to_string(&request)?.as_bytes()));
+        let action_hash = format!("{:x}", Sha256::digest(serde_json::to_string(&request)?.as_bytes()));
         let entry_hash = action_hash.clone();
         let policy_engine = self.policy_engine.clone();
 

@@ -1152,6 +1152,7 @@ export class ToolRegistry {
         const refId = args.ref_id as string | undefined;
         const origin = originOf(context.dom.url);
         let target = 'focused-element';
+        let fieldIsSensitive: boolean;
 
         // If ref_id provided, focus that element first
         if (refId) {
@@ -1182,33 +1183,33 @@ export class ToolRegistry {
             return { success: false, error: res?.error || 'Failed to resolve ref_id', summary: `Human type failed: ${res?.error}`, navigationOccurred: false };
           }
           target = `ref_id(${refId})`;
-          const fieldIsSensitive = isSensitiveInput(res);
-        }
+          fieldIsSensitive = isSensitiveInput(res);
+        } else {
+          // Resolve the currently-focused element so the bridge can make an
+          // informed sensitive-field decision for selector-less (focused-element)
+          // typing. Fail closed if the active element cannot be inspected.
+          let focusedCheck;
+          try {
+            focusedCheck = await chrome.scripting.executeScript({
+              target: { tabId: context.tabId, allFrames: false },
+              func: () => {
+                const el = document.activeElement as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+                if (!el) return null;
+                return {
+                  type: (el as HTMLInputElement).type || '',
+                  autocomplete: (el as HTMLInputElement).autocomplete || '',
+                  name: (el as HTMLInputElement).name || '',
+                  id: (el as HTMLInputElement).id || '',
+                };
+              },
+            });
+          } catch (e) {
+            return { success: false, error: String(e), summary: 'Human type failed', navigationOccurred: false };
+          }
 
-        // Resolve the currently-focused element so the bridge can make an
-        // informed sensitive-field decision for selector-less (focused-element)
-        // typing. Fail closed if the active element cannot be inspected.
-        let focusedCheck;
-        try {
-          focusedCheck = await chrome.scripting.executeScript({
-            target: { tabId: context.tabId, allFrames: false },
-            func: () => {
-              const el = document.activeElement as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
-              if (!el) return null;
-              return {
-                type: (el as HTMLInputElement).type || '',
-                autocomplete: (el as HTMLInputElement).autocomplete || '',
-                name: (el as HTMLInputElement).name || '',
-                id: (el as HTMLInputElement).id || '',
-              };
-            },
-          });
-        } catch (e) {
-          return { success: false, error: String(e), summary: 'Human type failed', navigationOccurred: false };
+          const focusedField = focusedCheck[0]?.result;
+          fieldIsSensitive = focusedField ? isSensitiveInput(focusedField) : true;
         }
-
-        const focusedField = focusedCheck[0]?.result;
-        const fieldIsSensitive = focusedField ? isSensitiveInput(focusedField) : true;
 
         // When preAuthorized, the human already approved this exact action:
         // skip the bridge so the token ledger is not double-charged.

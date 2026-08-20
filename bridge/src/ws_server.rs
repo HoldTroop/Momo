@@ -532,11 +532,27 @@ pub async fn ws_handler(
 }
 
 /// C6: only `chrome-extension://` origins may open the WebSocket. `None`
-/// (non-browser clients) is allowed.
+/// (non-browser clients) is allowed for MCP mode.
+/// When MOMO_EXTENSION_ID env var is set, validates exact extension ID.
 fn origin_allowed(origin: Option<&str>) -> bool {
     match origin {
-        None => true,
-        Some(o) => o.to_ascii_lowercase().starts_with("chrome-extension://"),
+        None => true,  // Non-browser clients (MCP mode)
+        Some(o) => {
+            let lower = o.to_ascii_lowercase();
+            if !lower.starts_with("chrome-extension://") {
+                return false;
+            }
+            
+            // If MOMO_EXTENSION_ID is set, validate exact ID
+            if let Ok(expected_id) = std::env::var("MOMO_EXTENSION_ID") {
+                let expected = format!("chrome-extension://{}", expected_id.to_lowercase());
+                return lower == expected;
+            }
+            
+            // Development mode: accept any chrome-extension:// origin
+            // Production deployments MUST set MOMO_EXTENSION_ID
+            true
+        }
     }
 }
 
