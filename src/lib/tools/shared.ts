@@ -80,7 +80,7 @@ export function waitForNavigation(tabId: number, waitUntil: string, timeoutMs = 
       resolve();
     };
     const timer = setTimeout(finish, timeoutMs);
-    const listener = (tid: number, info: chrome.tabs.TabChangeInfo) => {
+    const listener = (tid: number, info: chrome.tabs.OnUpdatedInfo) => {
       if (tid !== tabId || info.status !== 'complete') return;
       if (waitUntil === 'networkidle') {
         // Give async requests a short grace period after the load event.
