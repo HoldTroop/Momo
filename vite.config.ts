@@ -20,7 +20,7 @@ function contentScriptBuilds(): Plugin {
             sourcemap: true,
             rollupOptions: {
               input: {
-                [`content/${name}`]: resolve(__dirname, `src/content/${name}.ts`),
+                [`content/${name}`]: resolve(import.meta.dirname,`src/content/${name}.ts`),
               },
               output: {
                 format: 'iife',
@@ -32,7 +32,7 @@ function contentScriptBuilds(): Plugin {
           },
           resolve: {
             alias: {
-              '@': resolve(__dirname, 'src'),
+              '@': resolve(import.meta.dirname,'src'),
             },
           },
         });
@@ -42,18 +42,18 @@ function contentScriptBuilds(): Plugin {
 }
 
 export default defineConfig({
-  root: resolve(__dirname, 'src'),
+  root: resolve(import.meta.dirname,'src'),
   base: './',
   plugins: [react(), contentScriptBuilds()],
   build: {
-    outDir: resolve(__dirname, 'dist'),
+    outDir: resolve(import.meta.dirname,'dist'),
     emptyOutDir: true,
     minify: false, // Keep readable for debugging
     sourcemap: true,
     rollupOptions: {
       input: {
-        'sw/index': resolve(__dirname, 'src/sw/index.ts'),
-        'sidepanel/index': resolve(__dirname, 'src/sidepanel/index.html'),
+        'sw/index': resolve(import.meta.dirname,'src/sw/index.ts'),
+        'sidepanel/index': resolve(import.meta.dirname,'src/sidepanel/index.html'),
       },
       output: {
         entryFileNames: '[name].js',
@@ -65,7 +65,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@': resolve(__dirname, 'src'),
+      '@': resolve(import.meta.dirname,'src'),
     },
   },
 });

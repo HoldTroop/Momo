@@ -9,3 +9,7 @@ target/
 # OS / editor noise
 .DS_Store
 *.log
+
+# Local agent tooling (Kilo Code) — machine-specific, never commit
+.kilo/
+.kilocode/

@@ -4,17 +4,17 @@
 
 declare const chrome: {
   debugger: {
-    getTargets: (callback: (targets: chrome.debugger.TargetInfo[]) => void) => void;
+    getTargets: (callback: (targets: CdpTargetInfo[]) => void) => void;
     attach: (target: { targetId: string }, version: string, callback: () => void) => void;
     detach: (target: { targetId: string }, callback: () => void) => void;
     sendCommand: (target: { targetId: string }, method: string, params?: any, callback?: (result: any) => void) => void;
     onEvent: {
-      addListener: (callback: (source: chrome.debugger.Debuggee, method: string, params: any) => void) => void;
-      removeListener: (callback: (source: chrome.debugger.Debuggee, method: string, params: any) => void) => void;
+      addListener: (callback: (source: CdpDebuggee, method: string, params: any) => void) => void;
+      removeListener: (callback: (source: CdpDebuggee, method: string, params: any) => void) => void;
     };
     onDetach: {
-      addListener: (callback: (source: chrome.debugger.Debuggee, reason: string) => void) => void;
-      removeListener: (callback: (source: chrome.debugger.Debuggee, reason: string) => void) => void;
+      addListener: (callback: (source: CdpDebuggee, reason: string) => void) => void;
+      removeListener: (callback: (source: CdpDebuggee, reason: string) => void) => void;
     };
   };
   runtime: {
@@ -22,19 +22,20 @@ declare const chrome: {
   };
 };
 
-declare namespace chrome.debugger {
-  interface TargetInfo {
-    id: string;
-    title?: string;
-    url?: string;
-    type?: string;
-    tabId?: number;
-    attached?: boolean;
-  }
-  interface Debuggee {
-    targetId: string;
-    tabId?: number;
-  }
+// NOTE: `chrome.debugger` cannot be used as a namespace name — `debugger` is a
+// reserved word and rolldown (Vite 8's bundler) rejects it. Hoist the two type
+// shapes into standalone interfaces and reference them directly instead.
+interface CdpTargetInfo {
+  id: string;
+  title?: string;
+  url?: string;
+  type?: string;
+  tabId?: number;
+  attached?: boolean;
+}
+interface CdpDebuggee {
+  targetId: string;
+  tabId?: number;
 }
 
 export interface CdpTarget {
@@ -52,13 +53,13 @@ export interface CdpSession {
   onEvent: (method: string, params: any) => void;
   onDetach: (reason: string) => void;
   /** Internal handler refs so detach() can remove the listeners added in attach(). */
-  _eventListener?: (source: chrome.debugger.Debuggee, method: string, params: any) => void;
-  _detachListener?: (source: chrome.debugger.Debuggee, reason: string) => void;
+  _eventListener?: (source: CdpDebuggee, method: string, params: any) => void;
+  _detachListener?: (source: CdpDebuggee, reason: string) => void;
 }
 
 class CdpAdapter {
   private sessions: Map<string, CdpSession> = new Map();
-  private targetListeners: Map<string, (targetInfo: chrome.debugger.TargetInfo) => void> = new Map();
+  private targetListeners: Map<string, (targetInfo: CdpTargetInfo) => void> = new Map();
   private eventListeners: Map<string /*sessionId*/, Map<string /*method*/, Set<(method: string, params: any) => void>>> = new Map();
   private sessionDetachedCallbacks: Set<(sessionId: string) => void> = new Set();
 
