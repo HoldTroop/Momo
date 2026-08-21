@@ -11,9 +11,9 @@ Momo is designed with security as a foundational principle. We employ a **fail-c
 
 | Version | Supported          | Notes |
 | ------- | ------------------ | ----- |
-| 0.3.x   | ✅ Yes             | Current stable |
-| 0.2.x   | ⚠️ Security fixes only | Legacy line |
-| < 0.2   | ❌ No              | Please upgrade |
+| 0.3.x   | Yes             | Current stable |
+| 0.2.x   | Security fixes only | Legacy line |
+| < 0.2   | No              | Please upgrade |
 
 ## Reporting a Vulnerability
 
@@ -172,13 +172,13 @@ We encourage security research on Momo, but please follow these guidelines:
 
 ### Responsible Testing
 
-✅ **Allowed:**
+**Allowed:**
 - Testing on your own local installation
 - Automated scanning with reasonable rate limits
 - Testing in isolated development environments
 - Analyzing publicly available source code
 
-❌ **Not Allowed:**
+**Not Allowed:**
 - Testing on other users' installations without permission
 - Attempting to access others' policy databases or audit logs
 - Denial of service attacks
