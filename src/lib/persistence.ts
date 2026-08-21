@@ -108,7 +108,9 @@ class PersistenceManager {
 
     await this.db.open();
     this.initialized = true;
-    console.log('[Persistence] Initialized');
+    if (import.meta.env.DEV) {
+      console.log('[Persistence] Initialized');
+    }
   }
 
   async saveSession(sessionId: string, state: AgentState): Promise<void> {
@@ -354,7 +356,9 @@ class PersistenceManager {
     // order on open() (see init()). migrate() guarantees the DB is open and
     // up to date, and is safe to call before init() because it self-guards.
     if (!this.initialized) await this.init();
-    console.log('[Persistence] Migrated from', previousVersion ?? 'unknown');
+    if (import.meta.env.DEV) {
+      console.log('[Persistence] Migrated from', previousVersion ?? 'unknown');
+    }
   }
 
   async close(): Promise<void> {

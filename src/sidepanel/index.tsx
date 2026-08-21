@@ -75,7 +75,9 @@ function App() {
       });
 
       port.onDisconnect.addListener(() => {
-        console.log('[SidePanel] Disconnected from SW');
+        if (import.meta.env.DEV) {
+          console.log('[SidePanel] Disconnected from SW');
+        }
         if (unmounted) return;
         reconnectAttempts += 1;
         if (reconnectAttempts >= 3) {

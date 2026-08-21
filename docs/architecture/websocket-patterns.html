@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebSocket Patterns - Momo</title>
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+  <div class="page-container">
+    <header class="page-header">
+      <div class="breadcrumb">
+        <a href="../../README.md">Momo</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="../ARCHITECTURE.md">Architecture</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="index.html">Visualizations</a>
+        <span class="breadcrumb-separator">/</span>
+        <span>WebSocket Patterns</span>
+      </div>
+      <h1 class="page-title">WebSocket Patterns</h1>
+      <p class="page-description">
+        RPC, pub/sub, and command-channel flows over the extension↔bridge WebSocket. Shows request/response cycles, event streams, and how the bridge coordinates actions.
+      </p>
+    </header>
+
+    <div class="controls">
+      <button class="btn active" data-pattern="all">All Patterns</button>
+      <button class="btn" data-pattern="rpc">RPC</button>
+      <button class="btn" data-pattern="pubsub">Pub/Sub</button>
+      <button class="btn" data-pattern="command">Command Channel</button>
+    </div>
+
+    <div class="diagram-container">
+      <svg viewBox="0 0 1200 1000" xmlns="http://www.w3.org/2000/svg" class="diagram-svg">
+        <defs>
+          <marker id="arrow-purple" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#8B5CF6" />
+          </marker>
+          <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#3B82F6" />
+          </marker>
+          <marker id="arrow-amber" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#F59E0B" />
+          </marker>
+          <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#10B981" />
+          </marker>
+        </defs>
+
+        <!-- Pattern 1: RPC (Request/Response) -->
+        <g class="pattern-group" data-pattern="rpc">
+          <rect x="50" y="50" width="1100" height="260" rx="16" class="component-box" style="fill: rgba(139, 92, 246, 0.05); stroke: #8B5CF6;"/>
+          <text x="70" y="80" class="component-label" style="fill: #8B5CF6;">Pattern 1: RPC (Request/Response with correlation)</text>
+
+          <!-- Extension side -->
+          <rect x="100" y="120" width="200" height="160" rx="12" class="component-box extension" data-component="rpc-extension"/>
+          <text x="200" y="145" class="component-label">Extension</text>
+          <text x="200" y="165" class="component-sublabel">WSClient</text>
+
+          <!-- Bridge side -->
+          <rect x="900" y="120" width="200" height="160" rx="12" class="component-box bridge" data-component="rpc-bridge"/>
+          <text x="1000" y="145" class="component-label">Bridge</text>
+          <text x="1000" y="165" class="component-sublabel">LLM Gateway</text>
+
+          <!-- Request flow -->
+          <g class="flow-step">
+            <path d="M 300 180 L 900 180" class="connection-line websocket animated" marker-end="url(#arrow-purple)"/>
+            <rect x="500" y="130" width="200" height="60" rx="8" class="component-box" style="fill: rgba(139, 92, 246, 0.15); stroke: #8B5CF6;"/>
+            <text x="600" y="150" class="component-detail" style="font-weight: 600; fill: #8B5CF6;">1. Request</text>
+            <text x="600" y="170" class="component-detail" style="font-family: var(--font-mono);">request_id: "abc-123"</text>
+            <text x="600" y="185" class="component-detail" style="font-family: var(--font-mono);">method: "llm_infer"</text>
+          </g>
+
+          <!-- Response flow -->
+          <g class="flow-step">
+            <path d="M 900 240 L 300 240" class="connection-line websocket animated" marker-end="url(#arrow-purple)"/>
+            <rect x="500" y="210" width="200" height="60" rx="8" class="component-box" style="fill: rgba(139, 92, 246, 0.15); stroke: #8B5CF6;"/>
+            <text x="600" y="230" class="component-detail" style="font-weight: 600; fill: #8B5CF6;">2. Response</text>
+            <text x="600" y="250" class="component-detail" style="font-family: var(--font-mono);">request_id: "abc-123"</text>
+            <text x="600" y="265" class="component-detail" style="font-family: var(--font-mono);">result: {...}</text>
+          </g>
+
+          <!-- Implementation notes -->
+          <text x="110" y="200" class="component-detail">Sends with UUID</text>
+          <text x="110" y="215" class="component-detail">Awaits response via</text>
+          <text x="110" y="230" class="component-detail">Promise resolver</text>
+          <text x="110" y="250" class="component-detail" style="font-family: var(--font-mono); fill: #8B5CF6;">pendingRequests</text>
+          <text x="110" y="265" class="component-detail" style="font-family: var(--font-mono); fill: #8B5CF6;">  .set(id, resolve)</text>
+
+          <text x="910" y="200" class="component-detail">Matches request_id</text>
+          <text x="910" y="215" class="component-detail">Processes async</text>
+          <text x="910" y="230" class="component-detail">Returns result with</text>
+          <text x="910" y="245" class="component-detail">same ID</text>
+          <text x="910" y="265" class="component-detail" style="fill: #10B981;">✓ Guaranteed delivery</text>
+        </g>
+
+        <!-- Pattern 2: Pub/Sub (Event Streaming) -->
+        <g class="pattern-group" data-pattern="pubsub">
+          <rect x="50" y="340" width="1100" height="260" rx="16" class="component-box" style="fill: rgba(59, 130, 246, 0.05); stroke: #3B82F6;"/>
+          <text x="70" y="370" class="component-label" style="fill: #3B82F6;">Pattern 2: Pub/Sub (One-way event streaming)</text>
+
+          <!-- Bridge (Publisher) -->
+          <rect x="100" y="410" width="200" height="160" rx="12" class="component-box bridge" data-component="pubsub-bridge"/>
+          <text x="200" y="435" class="component-label">Bridge</text>
+          <text x="200" y="455" class="component-sublabel">Event Publisher</text>
+
+          <!-- Extension (Subscriber) -->
+          <rect x="900" y="410" width="200" height="160" rx="12" class="component-box extension" data-component="pubsub-extension"/>
+          <text x="1000" y="435" class="component-label">Extension</text>
+          <text x="1000" y="455" class="component-sublabel">Event Subscriber</text>
+
+          <!-- Event streams -->
+          <g class="flow-step">
+            <path d="M 300 450 L 900 450" class="connection-line" style="stroke: #3B82F6; stroke-dasharray: 3, 3;" marker-end="url(#arrow-blue)"/>
+            <text x="580" y="440" class="component-detail" style="font-weight: 600; fill: #3B82F6;">policy_decision</text>
+          </g>
+
+          <g class="flow-step">
+            <path d="M 300 490 L 900 490" class="connection-line" style="stroke: #3B82F6; stroke-dasharray: 3, 3;" marker-end="url(#arrow-blue)"/>
+            <text x="580" y="480" class="component-detail" style="font-weight: 600; fill: #3B82F6;">token_budget_update</text>
+          </g>
+
+          <g class="flow-step">
+            <path d="M 300 530 L 900 530" class="connection-line" style="stroke: #3B82F6; stroke-dasharray: 3, 3;" marker-end="url(#arrow-blue)"/>
+            <text x="580" y="520" class="component-detail" style="font-weight: 600; fill: #3B82F6;">audit_log_entry</text>
+          </g>
+
+          <!-- Implementation notes -->
+          <text x="110" y="490" class="component-detail">Emits events as</text>
+          <text x="110" y="505" class="component-detail">they occur</text>
+          <text x="110" y="525" class="component-detail" style="font-family: var(--font-mono); fill: #3B82F6;">ws.send(JSON</text>
+          <text x="110" y="540" class="component-detail" style="font-family: var(--font-mono); fill: #3B82F6;">  .stringify({</text>
+          <text x="110" y="555" class="component-detail" style="font-family: var(--font-mono); fill: #3B82F6;">    event, payload</text>
+          <text x="110" y="570" class="component-detail" style="font-family: var(--font-mono); fill: #3B82F6;">  }))</text>
+
+          <text x="910" y="490" class="component-detail">Listens on ws</text>
+          <text x="910" y="505" class="component-detail">onMessage</text>
+          <text x="910" y="525" class="component-detail" style="font-family: var(--font-mono); fill: #3B82F6;">if (msg.event) {</text>
+          <text x="910" y="540" class="component-detail" style="font-family: var(--font-mono); fill: #3B82F6;">  emit(event,</text>
+          <text x="910" y="555" class="component-detail" style="font-family: var(--font-mono); fill: #3B82F6;">    payload)</text>
+          <text x="910" y="570" class="component-detail" style="font-family: var(--font-mono); fill: #3B82F6;">}</text>
+        </g>
+
+        <!-- Pattern 3: Command Channel -->
+        <g class="pattern-group" data-pattern="command">
+          <rect x="50" y="630" width="1100" height="330" rx="16" class="component-box" style="fill: rgba(245, 158, 11, 0.05); stroke: #F59E0B;"/>
+          <text x="70" y="660" class="component-label" style="fill: #F59E0B;">Pattern 3: Command Channel (Gated execution with tracking)</text>
+
+          <!-- MCP Client -->
+          <rect x="100" y="700" width="150" height="80" rx="12" class="component-box" style="fill: rgba(245, 158, 11, 0.1); stroke: #F59E0B;" data-component="cmd-client"/>
+          <text x="175" y="730" class="component-label">MCP Client</text>
+          <text x="175" y="750" class="component-detail">tools/call</text>
+          <text x="175" y="765" class="component-detail">execute_action</text>
+
+          <!-- Bridge (Command Issuer) -->
+          <rect x="300" y="700" width="150" height="80" rx="12" class="component-box bridge" data-component="cmd-bridge"/>
+          <text x="375" y="730" class="component-label">Bridge</text>
+          <text x="375" y="750" class="component-sublabel">Policy Engine</text>
+
+          <!-- Extension (Command Executor) -->
+          <rect x="950" y="700" width="150" height="80" rx="12" class="component-box extension" data-component="cmd-extension"/>
+          <text x="1025" y="730" class="component-label">Extension</text>
+          <text x="1025" y="750" class="component-sublabel">Action Executor</text>
+
+          <!-- Flow 1: MCP to Bridge -->
+          <path d="M 250 740 L 300 740" class="connection-line" style="stroke: #F59E0B;" marker-end="url(#arrow-amber)"/>
+          <text x="260" y="730" class="component-detail" style="fill: #F59E0B;">1. Tool call</text>
+
+          <!-- Flow 2: Policy Check -->
+          <rect x="310" y="810" width="130" height="60" rx="8" class="component-box" style="fill: rgba(245, 158, 11, 0.15); stroke: #F59E0B;"/>
+          <text x="375" y="830" class="component-detail" style="font-weight: 600; fill: #F59E0B;">2. Policy Check</text>
+          <text x="375" y="850" class="component-detail">Origin allowlist</text>
+          <text x="375" y="865" class="component-detail">Token budget</text>
+
+          <!-- Flow 3: Command -->
+          <path d="M 450 740 L 950 740" class="connection-line websocket animated" marker-end="url(#arrow-amber)"/>
+          <rect x="600" y="690" width="250" height="60" rx="8" class="component-box" style="fill: rgba(245, 158, 11, 0.15); stroke: #F59E0B;"/>
+          <text x="725" y="710" class="component-detail" style="font-weight: 600; fill: #F59E0B;">3. Command</text>
+          <text x="725" y="730" class="component-detail" style="font-family: var(--font-mono);">{ request_id, method, params,</text>
+          <text x="725" y="745" class="component-detail" style="font-family: var(--font-mono);">  authorized: true }</text>
+
+          <!-- Flow 4: Execution -->
+          <rect x="960" y="810" width="130" height="60" rx="8" class="component-box" style="fill: rgba(245, 158, 11, 0.15); stroke: #F59E0B;"/>
+          <text x="1025" y="830" class="component-detail" style="font-weight: 600; fill: #F59E0B;">4. Execute</text>
+          <text x="1025" y="850" class="component-detail">Dispatch action</text>
+          <text x="1025" y="865" class="component-detail">via CDP/CS</text>
+
+          <!-- Flow 5: Result -->
+          <path d="M 950 760 L 450 760" class="connection-line websocket animated" marker-end="url(#arrow-amber)"/>
+          <rect x="600" y="770" width="250" height="60" rx="8" class="component-box" style="fill: rgba(245, 158, 11, 0.15); stroke: #F59E0B;"/>
+          <text x="725" y="790" class="component-detail" style="font-weight: 600; fill: #F59E0B;">5. CommandResult</text>
+          <text x="725" y="810" class="component-detail" style="font-family: var(--font-mono);">{ request_id, success: true,</text>
+          <text x="725" y="825" class="component-detail" style="font-family: var(--font-mono);">  outcome: "clicked el_12" }</text>
+
+          <!-- Flow 6: Audit -->
+          <rect x="310" y="890" width="130" height="60" rx="8" class="component-box" style="fill: rgba(245, 158, 11, 0.15); stroke: #F59E0B;"/>
+          <text x="375" y="910" class="component-detail" style="font-weight: 600; fill: #F59E0B;">6. Audit Log</text>
+          <text x="375" y="930" class="component-detail">Record decision</text>
+          <text x="375" y="945" class="component-detail">+ outcome</text>
+
+          <!-- Flow 7: Return to MCP -->
+          <path d="M 300 760 L 250 760" class="connection-line" style="stroke: #F59E0B;" marker-end="url(#arrow-amber)"/>
+          <text x="260" y="775" class="component-detail" style="fill: #F59E0B;">7. Result</text>
+
+          <!-- Key insight box -->
+          <rect x="490" y="880" width="380" height="70" rx="12" class="component-box" style="fill: rgba(16, 185, 129, 0.1); stroke: #10B981;"/>
+          <text x="680" y="905" class="component-sublabel" style="fill: #10B981;">Key: Extension never self-authorizes</text>
+          <text x="680" y="925" class="component-detail">Commands carry 'authorized: true' from bridge</text>
+          <text x="680" y="940" class="component-detail">Fail-closed: no auth flag = no execution</text>
+        </g>
+      </svg>
+
+      <div class="legend">
+        <div class="legend-item">
+          <div class="legend-color purple"></div>
+          <span>RPC Pattern (Request/Response)</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-color blue"></div>
+          <span>Pub/Sub Pattern (Event Streaming)</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-color amber"></div>
+          <span>Command Channel (Gated Execution)</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="tooltip" id="tooltip">
+      <div class="tooltip-title" id="tooltip-title"></div>
+      <div class="tooltip-content" id="tooltip-content"></div>
+    </div>
+  </div>
+
+  <script>
+    const componentData = {
+      'rpc-extension': {
+        title: 'RPC: Extension (Client)',
+        content: 'Sends requests with unique request_id. Stores Promise resolvers in a Map, resolved when matching response arrives. Handles timeouts and rejections.',
+        code: 'src/sw/ws-client.ts: sendRequest(method, params)'
+      },
+      'rpc-bridge': {
+        title: 'RPC: Bridge (Server)',
+        content: 'Receives requests, processes async (LLM inference, policy checks), and returns results with the same request_id for correlation.',
+        code: 'Rust: handle_rpc_request()'
+      },
+      'pubsub-bridge': {
+        title: 'Pub/Sub: Bridge (Publisher)',
+        content: 'Emits events as they occur: policy decisions, token budget updates, audit log entries. No request_id—events are fire-and-forget.',
+        code: 'Rust: event_emitter.publish(event, payload)'
+      },
+      'pubsub-extension': {
+        title: 'Pub/Sub: Extension (Subscriber)',
+        content: 'Listens for events on ws.onMessage. Dispatches to registered handlers. Used for real-time status updates and notifications.',
+        code: 'src/sw/ws-client.ts: on(event, handler)'
+      },
+      'cmd-client': {
+        title: 'MCP Client',
+        content: 'External client (Claude Desktop) calls tools like execute_action. Bridge translates to commands for the extension.',
+        code: 'MCP tools/call over stdio'
+      },
+      'cmd-bridge': {
+        title: 'Command Bridge',
+        content: 'Policy engine evaluates authorization. If approved, issues Command with authorized=true flag. Tracks request for audit logging.',
+        code: 'Rust: policy_engine.authorize() → issue_command()'
+      },
+      'cmd-extension': {
+        title: 'Command Extension',
+        content: 'Receives Commands from bridge. Only executes if authorized=true. Returns CommandResult with execution outcome for audit trail.',
+        code: 'src/sw/orchestrator.ts: executeCommand()'
+      }
+    };
+
+    const tooltip = document.getElementById('tooltip');
+    const tooltipTitle = document.getElementById('tooltip-title');
+    const tooltipContent = document.getElementById('tooltip-content');
+
+    document.querySelectorAll('[data-component]').forEach(element => {
+      element.addEventListener('mouseenter', (e) => {
+        const componentId = e.target.getAttribute('data-component');
+        const data = componentData[componentId];
+        if (data) {
+          tooltipTitle.textContent = data.title;
+          tooltipContent.innerHTML = `${data.content}<code class="tooltip-code">${data.code}</code>`;
+          tooltip.classList.add('visible');
+        }
+      });
+
+      element.addEventListener('mousemove', (e) => {
+        tooltip.style.left = (e.pageX + 20) + 'px';
+        tooltip.style.top = (e.pageY + 20) + 'px';
+      });
+
+      element.addEventListener('mouseleave', () => {
+        tooltip.classList.remove('visible');
+      });
+    });
+
+    // Pattern filtering
+    document.querySelectorAll('.controls .btn').forEach(button => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('.controls .btn').forEach(b => b.classList.remove('active'));
+        button.classList.add('active');
+
+        const pattern = button.getAttribute('data-pattern');
+        const patternGroups = document.querySelectorAll('.pattern-group');
+
+        if (pattern === 'all') {
+          patternGroups.forEach(g => g.style.opacity = '1');
+        } else {
+          patternGroups.forEach(g => {
+            if (g.getAttribute('data-pattern') === pattern) {
+              g.style.opacity = '1';
+            } else {
+              g.style.opacity = '0.15';
+            }
+          });
+        }
+      });
+    });
+  </script>
+</body>
+</html>

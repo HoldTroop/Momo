@@ -1,0 +1,21 @@
+[package]
+name = "mdabir183223/momo-architecture"
+version = "0.1.1"
+description = "Momo AI Browser Agent - Architecture Visualization"
+license = "MIT"
+readme = "README.md"
+
+[dependencies]
+"sharrattj/static-web-server" = "^1"
+
+[[command]]
+name = "script"
+module = "sharrattj/static-web-server:webserver"
+runner = "wasi"
+
+[command.annotations.wasi]
+env = ["PORT=8080", "LOG_LEVEL=info"]
+main-args = ["-d", "/app", "-p", "8080"]
+
+[fs]
+"/app" = "."

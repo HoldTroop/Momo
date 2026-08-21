@@ -1,0 +1,6 @@
+name: momo-architecture
+app_id: da_nzrI7tJU7xeA
+owner: mdabir183223
+package: .
+kind: wasmer.io/App.v0
+description: Momo AI Browser Agent - Architecture Visualization

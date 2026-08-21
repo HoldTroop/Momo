@@ -1,0 +1,52 @@
+graph TD
+    subgraph Extension["Chrome Extension (Manifest V3)"]
+        UI[Side Panel<br/>React UI]
+        SW[Service Worker<br/>AgentOrchestrator<br/>MessageRouter]
+        CS[Content Scripts<br/>Perception Layer<br/>AX Extractor]
+        Lib[Shared Libraries<br/>Tools, Persistence, Redaction]
+    end
+
+    subgraph Bridge["Rust Bridge (Tokio)"]
+        WS[WebSocket Server<br/>ConnectionManager]
+        Policy[Policy Engine<br/>Allowlist, Audit Log]
+        LLM[LLM Gateway<br/>Anthropic/Ollama]
+        MCP[MCP Server<br/>stdio/JSON-RPC]
+    end
+
+    subgraph Browser["Browser Runtime"]
+        CDP[Chrome DevTools Protocol]
+        DOM[Web Pages]
+        Storage[IndexedDB/SQLite]
+    end
+
+    subgraph External["External Clients"]
+        User[User<br/>Mode A]
+        MCPClient[MCP Client<br/>Mode B]
+    end
+
+    User -->|task input| UI
+    UI <-->|messages| SW
+    SW <-->|WebSocket| WS
+    SW <-->|inject/query| CS
+    SW -->|CDP commands| CDP
+    CS <-->|extract| DOM
+    SW <-->|persist| Storage
+    
+    WS <-->|authorize| Policy
+    WS <-->|plan/infer| LLM
+    Policy <-->|audit log| Storage
+    
+    MCPClient <-->|stdio| MCP
+    MCP <-->|commands| WS
+    
+    CDP -->|trusted input| DOM
+
+    classDef ui fill:#e6f1fb,stroke:#185fa5,color:#0c447c
+    classDef core fill:#eaf3de,stroke:#3b6d11,color:#27500a
+    classDef policy fill:#fef3e8,stroke:#d97706,color:#92400e
+    classDef external fill:#faeeda,stroke:#854f0b,color:#633806
+
+    class UI,User ui
+    class SW,CS,Lib,WS,LLM,MCP core
+    class Policy,Storage policy
+    class CDP,DOM,MCPClient external

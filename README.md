@@ -4,7 +4,7 @@
 
 **Policy-compliant autonomous AI browser agent operating in local context with transparent interaction**
 
-[![Build Status](https://img.shields.io/github/actions/workflow/status/HoldTroop/Momo/release.yml?branch=main)](https://github.com/HoldTroop/Momo/actions)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/HoldTroop/Momo/ci.yml?branch=main)](https://github.com/HoldTroop/Momo/actions)
 [![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.3.0-green.svg)](https://github.com/HoldTroop/Momo/releases)
 [![Chrome](https://img.shields.io/badge/chrome-118%2B-orange.svg)](https://www.google.com/chrome/)
@@ -20,9 +20,12 @@ Momo is a fully autonomous AI browser extension that executes complex multi-step
 
 Unlike cloud-based browser automation, Momo runs in your real Chrome profile with access to your cookies, sessions, certificates, and behavioral history. It combines Chrome DevTools Protocol (CDP) for trusted input simulation, accessibility tree extraction for robust element targeting, and a fail-closed policy engine for security.
 
+
+For comprehensive documentation, guides, and tutorials, see the [docs/](docs/README.md) directory.
 ---
 
 ## Table of Contents
+- [Quick Start](#quick-start)
 
 - [Features](#features)
 - [Architecture](#architecture)
@@ -37,11 +40,46 @@ Unlike cloud-based browser automation, Momo runs in your real Chrome profile wit
   - [Building](#building)
   - [Testing](#testing)
   - [Debugging](#debugging)
+- [Troubleshooting](#troubleshooting)
 - [Security](#security)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
 - [License](#license)
 - [Acknowledgments](#acknowledgments)
+
+---
+
+## Quick Start
+
+Get Momo running in 5 minutes.
+
+**Prerequisites**: Node.js 20+, Rust 1.70+, Chrome 118+
+
+**Steps**:
+
+1. **Clone and install dependencies**
+   \`\`\`bash
+   git clone https://github.com/HoldTroop/Momo.git && cd Momo && npm install
+   \`\`\`
+
+2. **Build the extension and bridge**
+   \`\`\`bash
+   npm run build:all
+   \`\`\`
+
+3. **Load extension in Chrome**
+   - Open \`chrome://extensions/\`, enable Developer mode, click Load unpacked, select the \`dist/\` folder
+
+4. **Start the bridge**
+   \`\`\`bash
+   ./bridge/target/release/agent-bridge
+   \`\`\`
+
+5. **Try your first task**
+   - Click the Momo extension icon to open the side panel
+   - Enter a task: \`"Search for the latest TypeScript documentation on Google"\`
+
+**Next steps**: See [Getting Started](#getting-started) for detailed configuration and usage options.
 
 ---
 
@@ -553,6 +591,162 @@ MOMO_COMMAND_TIMEOUT_MS=2000 node tools/mock-extension.mjs timeout
 
 ---
 
+## Troubleshooting
+
+### Extension not loading
+
+**Symptoms**: Extension doesn't appear in toolbar, or shows as disabled in `chrome://extensions/`
+
+**Solutions**:
+- Verify Chrome version is 118 or higher: `chrome://version/`
+- Ensure Developer mode is enabled in `chrome://extensions/` (toggle in top-right)
+- Confirm build artifacts exist in `dist/` directory (run `npm run build` if missing)
+- Check for manifest errors in the extension card (red error banner)
+- Try removing and reloading the extension: click **Remove** → **Load unpacked** → select `dist/`
+- Clear extension cache: disable extension, close all Chrome windows, re-enable
+
+### Bridge connection failures
+
+**Symptoms**: Extension shows "Disconnected" or "Bridge unavailable" in side panel
+
+**Solutions**:
+- Verify bridge is running: `ps aux | grep agent-bridge`
+- Start the bridge if not running: `./bridge/target/release/agent-bridge`
+- Check WebSocket port availability (9090-9100): `lsof -i :9090-9100` or `netstat -an | grep 909`
+- Test manual connection: `wscat -c ws://127.0.0.1:9090` (install via `npm i -g wscat`)
+- Check firewall/security software: ensure localhost WebSocket connections are allowed
+- Look for port conflicts: if another service is using ports 9090-9100, stop it or configure bridge to use different ports
+- Review bridge logs: `RUST_LOG=debug ./bridge/target/release/agent-bridge` and check for connection errors
+- Restart both bridge and extension: close Chrome completely, restart bridge, reopen Chrome
+
+**Port discovery troubleshooting**:
+```bash
+# Check if bridge is listening on expected ports
+netstat -tlnp | grep agent-bridge
+
+# Test connectivity manually
+curl -i -N -H "Connection: Upgrade" -H "Upgrade: websocket" \
+  -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: test" \
+  http://localhost:9090
+```
+
+### Actions denied by policy
+
+**Symptoms**: Tasks fail with "Action denied by policy" or "Origin not in allowlist"
+
+**Solutions**:
+- Check current policy configuration at `~/.momo/policy.db`
+- Add target origins to allowlist (see [Configuration](#configuration))
+- Verify allowed actions include necessary operations: `click`, `type`, `navigate`, `scroll`
+- Review audit logs for denial reasons:
+  ```bash
+  sqlite3 ~/.momo/policy.db "SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 10;"
+  ```
+- Ensure `confirmation_policy` matches your security requirements (`Low`, `Moderate`, or `Sensitive`)
+- Check token budget hasn't been exceeded: `token_budget_per_task` in policy configuration
+- For subdomain matching, use wildcard syntax: `*.example.com` (not `example.com` alone)
+- Test with permissive policy first, then tighten:
+  ```json
+  {
+    "origin_allowlist": ["*"],
+    "permitted_actions": ["click", "type", "navigate", "scroll"],
+    "confirmation_policy": "Low",
+    "token_budget_per_task": 500000
+  }
+  ```
+
+### Stale element references
+
+**Symptoms**: Actions fail with "stale_reference" error or "Element no longer exists"
+
+**Solutions**:
+- Momo automatically retries with fresh element resolution (see src/lib/tool-registry.ts:152)
+- Stale references occur when the DOM changes between element discovery and action execution
+- If retries fail repeatedly, the page may have aggressive dynamic content:
+  - Increase `MOMO_COMMAND_TIMEOUT_MS` to allow more time for DOM stabilization
+  - Wait for specific page state before actions (e.g., "wait until page stops loading")
+  - Use MCP mode and manually call `get_interactive_elements` before each action
+- Check for JavaScript frameworks that continuously mutate DOM (React, Vue, Angular)
+- Review logs for `[Perception]` warnings about rapid DOM changes
+- For single-page applications (SPAs), ensure navigation is complete before executing actions
+
+**Manual recovery in MCP mode**:
+```json
+// 1. Get fresh elements
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_interactive_elements"}}
+
+// 2. Use new ref from response
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute_action","arguments":{"action":"click","ref":"el_47"}}}
+```
+
+### API key/LLM issues
+
+**Symptoms**: Bridge starts but tasks fail with "LLM error" or "Authentication failed"
+
+**Solutions**:
+- Verify `.env` file exists in bridge directory or environment variables are set
+- Check Anthropic API key is valid: `echo $ANTHROPIC_API_KEY` (should start with `sk-ant-`)
+- Test API key manually:
+  ```bash
+  curl https://api.anthropic.com/v1/messages \
+    -H "x-api-key: $ANTHROPIC_API_KEY" \
+    -H "anthropic-version: 2023-06-01" \
+    -H "content-type: application/json" \
+    -d '{"model":"claude-3-5-sonnet-20241022","max_tokens":1024,"messages":[{"role":"user","content":"Hello"}]}'
+  ```
+- For Ollama (local inference):
+  - Verify Ollama is running: `curl http://localhost:11434/api/tags`
+  - Check model is pulled: `ollama list`
+  - Pull required model if missing: `ollama pull llama3.1`
+  - Set `OLLAMA_BASE_URL` if using non-default port
+- Check rate limits: Anthropic API has tiered rate limits based on usage
+- Review bridge logs for detailed error messages: `RUST_LOG=agent_bridge::llm=debug`
+- Ensure network connectivity: test with `curl https://api.anthropic.com`
+
+### Build failures
+
+**Symptoms**: `npm run build` or `npm run build:bridge` fails with compilation errors
+
+**Solutions**:
+
+**Node.js/TypeScript build issues**:
+- Verify Node.js version: `node --version` (requires 18+)
+- Clear dependency cache and reinstall: `rm -rf node_modules package-lock.json && npm install`
+- Check for TypeScript errors: `npx tsc --noEmit`
+- Verify Vite config: ensure `vite.config.ts` has correct paths to `manifest.json`
+- Clear Vite cache: `rm -rf node_modules/.vite`
+- Update dependencies: `npm update` (check for breaking changes in `CHANGELOG.md`)
+
+**Rust bridge build issues**:
+- Verify Rust version: `rustc --version` (requires 1.70+)
+- Update Rust toolchain: `rustup update stable`
+- Clean and rebuild: `cd bridge && cargo clean && cargo build --release`
+- Check for missing system libraries:
+  - Linux: `sudo apt-get install pkg-config libssl-dev libsqlite3-dev`
+  - macOS: `brew install openssl sqlite`
+  - Windows: install Visual Studio Build Tools with C++ development workload
+- Platform-specific linking errors:
+  - macOS ARM64: ensure XCode command-line tools are installed (`xcode-select --install`)
+  - Linux: verify `gcc` and `g++` are available
+  - Windows: use `x64 Native Tools Command Prompt for VS 2022`
+- Check Cargo.toml for platform-specific dependencies
+
+**Dependency conflicts**:
+```bash
+# Check for outdated packages
+npm outdated
+
+# Audit for vulnerabilities
+npm audit
+
+# Fix automatically when possible
+npm audit fix
+```
+
+For persistent build issues, see [CONTRIBUTING.md](CONTRIBUTING.md) or [open an issue](https://github.com/HoldTroop/Momo/issues).
+
+---
+
 ## Security
 
 Momo is designed with security as a first-class concern. All input is treated as untrusted until explicitly authorized by the policy engine.
@@ -587,7 +781,9 @@ Do not open public issues for security vulnerabilities.
 
 ## Contributing
 
-Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines on commit conventions, pull requests, and code standards.
+Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) and our [Code of Conduct](CODE_OF_CONDUCT.md) for detailed guidelines on commit conventions, pull requests, and code standards.
+
+For common questions and troubleshooting, see our [FAQ](docs/FAQ.md).
 
 Key points:
 

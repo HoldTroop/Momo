@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Overall Architecture - Momo</title>
+  <link rel="stylesheet" href="assets/styles.css">
+  <style>
+    .diagram-wrapper {
+      position: relative;
+      overflow: visible;
+    }
+
+    svg {
+      max-width: 100%;
+      height: auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="page-container">
+    <header class="page-header">
+      <div class="breadcrumb">
+        <a href="../../README.md">Momo</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="../ARCHITECTURE.md">Architecture</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="index.html">Visualizations</a>
+        <span class="breadcrumb-separator">/</span>
+        <span>Overall Architecture</span>
+      </div>
+      <h1 class="page-title">Overall Architecture</h1>
+      <p class="page-description">
+        Complete system topology showing how the Chrome Extension, Rust Bridge, and Browser Runtime coordinate across 5 architectural layers.
+      </p>
+    </header>
+
+    <div class="controls">
+      <button class="btn active" data-layer="all">All Layers</button>
+      <button class="btn" data-layer="extension">Extension</button>
+      <button class="btn" data-layer="bridge">Bridge</button>
+      <button class="btn" data-layer="browser">Browser</button>
+      <button class="btn" data-layer="external">External</button>
+    </div>
+
+    <div class="diagram-container">
+      <div class="diagram-wrapper">
+        <svg viewBox="0 0 1200 900" xmlns="http://www.w3.org/2000/svg" class="diagram-svg" id="architecture-svg">
+          <!-- Definitions -->
+          <defs>
+            <!-- Arrow markers -->
+            <marker id="arrow-purple" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="#8B5CF6" />
+            </marker>
+            <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="#3B82F6" />
+            </marker>
+            <marker id="arrow-amber" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="#F59E0B" />
+            </marker>
+            <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="#10B981" />
+            </marker>
+          </defs>
+
+          <!-- External Clients Layer (Top) -->
+          <g class="layer-group" data-layer="external">
+            <rect x="50" y="50" width="200" height="80" rx="12" class="component-box" style="fill: rgba(245, 158, 11, 0.1); stroke: #F59E0B;" data-component="user"/>
+            <text x="150" y="80" class="component-label">User</text>
+            <text x="150" y="100" class="component-sublabel">Mode A</text>
+            <text x="150" y="115" class="component-detail">Direct UI interaction</text>
+
+            <rect x="950" y="50" width="200" height="80" rx="12" class="component-box" style="fill: rgba(245, 158, 11, 0.1); stroke: #F59E0B;" data-component="mcp-client"/>
+            <text x="1050" y="80" class="component-label">MCP Client</text>
+            <text x="1050" y="100" class="component-sublabel">Mode B</text>
+            <text x="1050" y="115" class="component-detail">Claude Desktop / stdio</text>
+          </g>
+
+          <!-- Chrome Extension Layer -->
+          <g class="layer-group" data-layer="extension">
+            <!-- Extension boundary box -->
+            <rect x="30" y="170" width="740" height="280" rx="16" class="component-box extension" style="fill: rgba(139, 92, 246, 0.05); stroke: #8B5CF6; stroke-width: 2; stroke-dasharray: 5, 5;"/>
+            <text x="50" y="195" class="component-sublabel" style="fill: #8B5CF6; font-weight: 600;">Chrome Extension (Manifest V3)</text>
+
+            <!-- Side Panel UI -->
+            <rect x="50" y="220" width="160" height="100" rx="12" class="component-box extension" data-component="ui"/>
+            <text x="130" y="250" class="component-label">Side Panel</text>
+            <text x="130" y="270" class="component-sublabel">React UI</text>
+            <text x="130" y="290" class="component-detail">Task input</text>
+            <text x="130" y="305" class="component-detail">Status display</text>
+
+            <!-- Service Worker -->
+            <rect x="250" y="220" width="200" height="200" rx="12" class="component-box extension" data-component="service-worker"/>
+            <text x="350" y="245" class="component-label">Service Worker</text>
+            <text x="350" y="270" class="component-sublabel">AgentOrchestrator</text>
+            <text x="350" y="290" class="component-detail">MessageRouter</text>
+            <text x="350" y="305" class="component-detail">PortManager</text>
+            <text x="350" y="320" class="component-detail">AlarmManager</text>
+            <text x="350" y="350" class="component-sublabel" style="fill: #8B5CF6;">Orchestration Hub</text>
+            <text x="350" y="370" class="component-detail">Coordinates all components</text>
+            <text x="350" y="385" class="component-detail">Manages lifecycle</text>
+            <text x="350" y="400" class="component-detail">Routes messages</text>
+
+            <!-- Content Scripts -->
+            <rect x="490" y="220" width="160" height="200" rx="12" class="component-box extension" data-component="content-scripts"/>
+            <text x="570" y="245" class="component-label">Content Scripts</text>
+            <text x="570" y="270" class="component-sublabel">Perception Layer</text>
+            <text x="570" y="290" class="component-detail">AX Extractor</text>
+            <text x="570" y="305" class="component-detail">DOM Observer</text>
+            <text x="570" y="320" class="component-detail">Human Input</text>
+            <text x="570" y="350" class="component-sublabel" style="fill: #8B5CF6;">Page Context</text>
+            <text x="570" y="370" class="component-detail">Injected per-tab</text>
+            <text x="570" y="385" class="component-detail">Extracts elements</text>
+            <text x="570" y="400" class="component-detail">Observes changes</text>
+
+            <!-- Shared Libraries -->
+            <rect x="50" y="340" width="160" height="80" rx="12" class="component-box extension" data-component="libraries"/>
+            <text x="130" y="365" class="component-label">Shared Libraries</text>
+            <text x="130" y="385" class="component-detail">Tool Registry</text>
+            <text x="130" y="400" class="component-detail">Persistence (Dexie)</text>
+            <text x="130" y="415" class="component-detail">Redaction Engine</text>
+          </g>
+
+          <!-- Rust Bridge Layer -->
+          <g class="layer-group" data-layer="bridge">
+            <!-- Bridge boundary box -->
+            <rect x="30" y="490" width="740" height="220" rx="16" class="component-box bridge" style="fill: rgba(59, 130, 246, 0.05); stroke: #3B82F6; stroke-width: 2; stroke-dasharray: 5, 5;"/>
+            <text x="50" y="515" class="component-sublabel" style="fill: #3B82F6; font-weight: 600;">Rust Bridge (Tokio Async Runtime)</text>
+
+            <!-- WebSocket Server -->
+            <rect x="50" y="540" width="160" height="100" rx="12" class="component-box bridge" data-component="websocket"/>
+            <text x="130" y="570" class="component-label">WebSocket Server</text>
+            <text x="130" y="590" class="component-sublabel">ConnectionManager</text>
+            <text x="130" y="610" class="component-detail">Auth tokens</text>
+            <text x="130" y="625" class="component-detail">Message routing</text>
+
+            <!-- Policy Engine -->
+            <rect x="240" y="540" width="160" height="140" rx="12" class="component-box" style="fill: rgba(245, 158, 11, 0.1); stroke: #F59E0B;" data-component="policy"/>
+            <text x="320" y="570" class="component-label">Policy Engine</text>
+            <text x="320" y="595" class="component-sublabel">Fail-Closed</text>
+            <text x="320" y="615" class="component-detail">Origin allowlist</text>
+            <text x="320" y="630" class="component-detail">Token budgets</text>
+            <text x="320" y="645" class="component-detail">Risk classification</text>
+            <text x="320" y="665" class="component-detail" style="fill: #F59E0B;">Audit Log (SQLite)</text>
+
+            <!-- LLM Gateway -->
+            <rect x="430" y="540" width="160" height="100" rx="12" class="component-box bridge" data-component="llm"/>
+            <text x="510" y="570" class="component-label">LLM Gateway</text>
+            <text x="510" y="590" class="component-sublabel">Multi-provider</text>
+            <text x="510" y="610" class="component-detail">Anthropic API</text>
+            <text x="510" y="625" class="component-detail">Ollama (local)</text>
+
+            <!-- MCP Server -->
+            <rect x="610" y="540" width="140" height="100" rx="12" class="component-box bridge" data-component="mcp-server"/>
+            <text x="680" y="570" class="component-label">MCP Server</text>
+            <text x="680" y="590" class="component-sublabel">JSON-RPC</text>
+            <text x="680" y="610" class="component-detail">stdio transport</text>
+            <text x="680" y="625" class="component-detail">Tool definitions</text>
+          </g>
+
+          <!-- Browser Runtime Layer -->
+          <g class="layer-group" data-layer="browser">
+            <!-- Browser boundary box -->
+            <rect x="30" y="740" width="740" height="120" rx="16" class="component-box" style="fill: rgba(16, 185, 129, 0.05); stroke: #10B981; stroke-width: 2; stroke-dasharray: 5, 5;"/>
+            <text x="50" y="765" class="component-sublabel" style="fill: #10B981; font-weight: 600;">Browser Runtime (Chrome APIs)</text>
+
+            <!-- CDP -->
+            <rect x="50" y="790" width="200" height="50" rx="12" class="component-box" style="fill: rgba(16, 185, 129, 0.1); stroke: #10B981;" data-component="cdp"/>
+            <text x="150" y="820" class="component-label">Chrome DevTools Protocol</text>
+
+            <!-- DOM -->
+            <rect x="280" y="790" width="200" height="50" rx="12" class="component-box" style="fill: rgba(16, 185, 129, 0.1); stroke: #10B981;" data-component="dom"/>
+            <text x="380" y="820" class="component-label">Web Pages (DOM)</text>
+
+            <!-- Storage -->
+            <rect x="510" y="790" width="240" height="50" rx="12" class="component-box" style="fill: rgba(16, 185, 129, 0.1); stroke: #10B981;" data-component="storage"/>
+            <text x="630" y="820" class="component-label">Storage (IndexedDB / SQLite)</text>
+          </g>
+
+          <!-- Connection Lines -->
+          <g class="connections">
+            <!-- User to UI -->
+            <path d="M 150 130 L 150 220" class="connection-line" style="stroke: #F59E0B;" marker-end="url(#arrow-amber)" data-flow="user-input"/>
+
+            <!-- UI to Service Worker -->
+            <path d="M 210 270 L 250 270" class="connection-line message" marker-end="url(#arrow-amber)" data-flow="ui-sw"/>
+            <path d="M 250 290 L 210 290" class="connection-line message" marker-end="url(#arrow-amber)" data-flow="sw-ui"/>
+
+            <!-- Service Worker to Content Scripts -->
+            <path d="M 450 300 L 490 300" class="connection-line message" marker-end="url(#arrow-amber)" data-flow="sw-cs"/>
+            <path d="M 490 320 L 450 320" class="connection-line message" marker-end="url(#arrow-amber)" data-flow="cs-sw"/>
+
+            <!-- Content Scripts to DOM -->
+            <path d="M 570 420 L 570 600 L 480 600 L 480 790" class="connection-line data-flow" marker-end="url(#arrow-green)" data-flow="cs-dom"/>
+
+            <!-- Service Worker to WebSocket -->
+            <path d="M 350 420 L 350 490 L 130 490 L 130 540" class="connection-line websocket animated" marker-end="url(#arrow-purple)" data-flow="sw-ws"/>
+
+            <!-- Service Worker to CDP -->
+            <path d="M 250 370 L 150 370 L 150 790" class="connection-line cdp" marker-end="url(#arrow-blue)" data-flow="sw-cdp"/>
+
+            <!-- Service Worker to Storage -->
+            <path d="M 450 380 L 670 380 L 670 790" class="connection-line data-flow" marker-end="url(#arrow-green)" data-flow="sw-storage"/>
+
+            <!-- WebSocket to Policy -->
+            <path d="M 210 590 L 240 590" class="connection-line" style="stroke: #F59E0B;" marker-end="url(#arrow-amber)" data-flow="ws-policy"/>
+
+            <!-- WebSocket to LLM -->
+            <path d="M 190 610 L 190 680 L 510 680 L 510 640" class="connection-line" style="stroke: #3B82F6;" marker-end="url(#arrow-blue)" data-flow="ws-llm"/>
+
+            <!-- Policy to Storage (Audit Log) -->
+            <path d="M 400 620 L 630 620 L 630 790" class="connection-line data-flow" marker-end="url(#arrow-green)" data-flow="policy-storage"/>
+
+            <!-- MCP Client to MCP Server -->
+            <path d="M 1050 130 L 1050 490 L 680 490 L 680 540" class="connection-line websocket animated" marker-end="url(#arrow-purple)" data-flow="mcp-client-server"/>
+
+            <!-- MCP Server to WebSocket -->
+            <path d="M 610 590 L 210 590" class="connection-line" style="stroke: #3B82F6;" marker-end="url(#arrow-blue)" data-flow="mcp-ws"/>
+
+            <!-- CDP to DOM -->
+            <path d="M 250 815 L 280 815" class="connection-line cdp" marker-end="url(#arrow-blue)" data-flow="cdp-dom"/>
+          </g>
+
+          <!-- Labels for connection types -->
+          <g class="connection-labels">
+            <text x="155" y="175" class="component-detail" style="fill: #F59E0B;">task input</text>
+            <text x="225" y="265" class="component-detail" style="fill: #F59E0B;">messages</text>
+            <text x="465" y="295" class="component-detail" style="fill: #F59E0B;">inject/query</text>
+            <text x="240" y="365" class="component-detail" style="fill: #3B82F6;">CDP commands</text>
+            <text x="135" y="470" class="component-detail" style="fill: #8B5CF6;">WebSocket</text>
+            <text x="1060" y="300" class="component-detail" style="fill: #8B5CF6;">stdio</text>
+            <text x="265" y="815" class="component-detail" style="fill: #3B82F6;">trusted input</text>
+            <text x="690" y="775" class="component-detail" style="fill: #10B981;">persist</text>
+          </g>
+        </svg>
+      </div>
+
+      <div class="legend">
+        <div class="legend-item">
+          <div class="legend-color purple"></div>
+          <span>Extension Components</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-color blue"></div>
+          <span>Bridge Components</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-color amber"></div>
+          <span>Policy & External</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-color green"></div>
+          <span>Browser Runtime</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="tooltip" id="tooltip">
+      <div class="tooltip-title" id="tooltip-title"></div>
+      <div class="tooltip-content" id="tooltip-content"></div>
+    </div>
+  </div>
+
+  <script>
+    // Component data for tooltips
+    const componentData = {
+      'user': {
+        title: 'User (Mode A)',
+        content: 'Direct interaction with the Momo UI. User provides tasks through the React side panel and receives status updates.',
+        code: 'Mode A: Internal orchestration'
+      },
+      'mcp-client': {
+        title: 'MCP Client (Mode B)',
+        content: 'External client (e.g., Claude Desktop) that controls Momo via the MCP protocol over stdio transport.',
+        code: 'Mode B: Client control via tools/call'
+      },
+      'ui': {
+        title: 'Side Panel UI',
+        content: 'React-based user interface for task input, status display, and interaction with the agent.',
+        code: 'src/sidepanel/index.tsx'
+      },
+      'service-worker': {
+        title: 'Service Worker',
+        content: 'Central orchestration hub. Coordinates between UI, content scripts, bridge, and CDP. Manages message routing, port connections, and lifecycle.',
+        code: 'src/sw/orchestrator.ts, message-router.ts'
+      },
+      'content-scripts': {
+        title: 'Content Scripts',
+        content: 'Injected into each tab. Extracts page structure via AX tree, observes DOM mutations, and handles human input detection.',
+        code: 'src/content/perception.ts, ax-extractor.ts'
+      },
+      'libraries': {
+        title: 'Shared Libraries',
+        content: 'Common utilities: tool registry, persistence layer (Dexie), redaction engine for sensitive data.',
+        code: 'src/lib/tool-registry.ts, persistence.ts'
+      },
+      'websocket': {
+        title: 'WebSocket Server',
+        content: 'Manages extension↔bridge communication. Handles auth tokens, message routing, and connection lifecycle.',
+        code: 'Rust bridge: ws-server module'
+      },
+      'policy': {
+        title: 'Policy Engine',
+        content: 'Fail-closed security boundary. Enforces origin allowlists, token budgets, risk classification. Writes immutable audit log.',
+        code: 'Rust bridge: policy-engine module'
+      },
+      'llm': {
+        title: 'LLM Gateway',
+        content: 'Multi-provider LLM interface. Supports Anthropic API and local Ollama for planning and inference.',
+        code: 'Rust bridge: llm-gateway module'
+      },
+      'mcp-server': {
+        title: 'MCP Server',
+        content: 'Exposes Momo capabilities as MCP tools. Communicates via stdio JSON-RPC for Mode B operation.',
+        code: 'Rust bridge: mcp-server module'
+      },
+      'cdp': {
+        title: 'Chrome DevTools Protocol',
+        content: 'Low-level browser control API. Used for trusted input dispatch (mouse, keyboard) that bypasses page scripts.',
+        code: 'chrome.debugger API wrapper'
+      },
+      'dom': {
+        title: 'Web Pages (DOM)',
+        content: 'Target web pages that Momo interacts with. Content scripts extract structure, CDP dispatches actions.',
+        code: 'Browser runtime'
+      },
+      'storage': {
+        title: 'Storage',
+        content: 'Persistent state: IndexedDB for extension (checkpoints, task queue), SQLite for bridge (audit log, policy config).',
+        code: 'IndexedDB (Dexie) + SQLite'
+      }
+    };
+
+    // Tooltip handling
+    const tooltip = document.getElementById('tooltip');
+    const tooltipTitle = document.getElementById('tooltip-title');
+    const tooltipContent = document.getElementById('tooltip-content');
+
+    document.querySelectorAll('[data-component]').forEach(element => {
+      element.addEventListener('mouseenter', (e) => {
+        const componentId = e.target.getAttribute('data-component');
+        const data = componentData[componentId];
+        if (data) {
+          tooltipTitle.textContent = data.title;
+          tooltipContent.innerHTML = `${data.content}<code class="tooltip-code">${data.code}</code>`;
+          tooltip.classList.add('visible');
+        }
+      });
+
+      element.addEventListener('mousemove', (e) => {
+        tooltip.style.left = (e.pageX + 20) + 'px';
+        tooltip.style.top = (e.pageY + 20) + 'px';
+      });
+
+      element.addEventListener('mouseleave', () => {
+        tooltip.classList.remove('visible');
+      });
+    });
+
+    // Layer filtering
+    document.querySelectorAll('.controls .btn').forEach(button => {
+      button.addEventListener('click', () => {
+        // Update active button
+        document.querySelectorAll('.controls .btn').forEach(b => b.classList.remove('active'));
+        button.classList.add('active');
+
+        const layer = button.getAttribute('data-layer');
+        const layerGroups = document.querySelectorAll('.layer-group');
+
+        if (layer === 'all') {
+          layerGroups.forEach(g => g.classList.remove('dimmed'));
+        } else {
+          layerGroups.forEach(g => {
+            if (g.getAttribute('data-layer') === layer) {
+              g.classList.remove('dimmed');
+            } else {
+              g.classList.add('dimmed');
+            }
+          });
+        }
+      });
+    });
+  </script>
+</body>
+</html>

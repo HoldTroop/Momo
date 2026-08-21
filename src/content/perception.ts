@@ -286,7 +286,9 @@ export function resolveByRefStrict(ref: string): RefResolution {
 }
 
 // Initialize perception on load
-console.log('[Perception] Module loaded');
+if (import.meta.env.DEV) {
+  console.log('[Perception] Module loaded');
+}
 
 // Expose globally for the tool layer to call. The `Window` typing for these
 // globals lives in src/globals.d.ts (a dedicated ambient module), so the

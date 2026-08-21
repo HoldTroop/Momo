@@ -68,7 +68,9 @@ export class WsClient {
         ws.binaryType = 'arraybuffer';
 
         ws.onopen = () => {
-          console.log('[WsClient] Connected to', this.url);
+          if (import.meta.env.DEV) {
+            console.log('[WsClient] Connected to', this.url);
+          }
           resolve();
           void this.performAuth();
         };
@@ -79,7 +81,9 @@ export class WsClient {
 
         ws.onclose = (event: CloseEvent) => {
           if (this.ws !== ws) return;
-          console.log('[WsClient] Disconnected:', event.code, event.reason);
+          if (import.meta.env.DEV) {
+            console.log('[WsClient] Disconnected:', event.code, event.reason);
+          }
           this.stopHeartbeat();
           for (const [id, resolver] of this.pending) {
             resolver(Promise.reject(new Error('WebSocket disconnected')));
@@ -125,7 +129,9 @@ export class WsClient {
       ? 0
       : Math.min(this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts), this.maxReconnectDelay);
     this.reconnectAttempts++;
-    console.log(`[WsClient] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+    if (import.meta.env.DEV) {
+      console.log(`[WsClient] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+    }
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
@@ -138,7 +144,9 @@ export class WsClient {
     if (this.outbox.length === 0) return;
     const queued = this.outbox;
     this.outbox = [];
-    console.log(`[WsClient] Flushing ${queued.length} queued message(s)`);
+    if (import.meta.env.DEV) {
+      console.log(`[WsClient] Flushing ${queued.length} queued message(s)`);
+    }
     for (const entry of queued) {
       this.transmit(entry.type, entry.payload).then(entry.resolve).catch(entry.reject);
     }

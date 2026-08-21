@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Operating Modes - Momo</title>
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+  <div class="page-container">
+    <header class="page-header">
+      <div class="breadcrumb">
+        <a href="../../README.md">Momo</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="../ARCHITECTURE.md">Architecture</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="index.html">Visualizations</a>
+        <span class="breadcrumb-separator">/</span>
+        <span>Operating Modes</span>
+      </div>
+      <h1 class="page-title">Operating Modes</h1>
+      <p class="page-description">
+        Mode A (autonomous orchestration) vs Mode B (MCP client control). Compares the two execution paths and shows how the architecture supports both paradigms.
+      </p>
+    </header>
+
+    <div class="controls">
+      <button class="btn active" data-mode="both">Compare Both</button>
+      <button class="btn" data-mode="mode-a">Mode A Only</button>
+      <button class="btn" data-mode="mode-b">Mode B Only</button>
+    </div>
+
+    <div class="diagram-container">
+      <svg viewBox="0 0 1400 1100" xmlns="http://www.w3.org/2000/svg" class="diagram-svg">
+        <defs>
+          <marker id="arrow-purple" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#8B5CF6" />
+          </marker>
+          <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#3B82F6" />
+          </marker>
+          <marker id="arrow-amber" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#F59E0B" />
+          </marker>
+          <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#10B981" />
+          </marker>
+        </defs>
+
+        <!-- Mode A (Left Side) -->
+        <g class="mode-group" data-mode="mode-a">
+          <rect x="50" y="50" width="600" height="500" rx="16" class="component-box" style="fill: rgba(139, 92, 246, 0.05); stroke: #8B5CF6; stroke-width: 3;"/>
+          <text x="350" y="90" class="component-label" style="fill: #8B5CF6;">MODE A: Autonomous Orchestration</text>
+          <text x="350" y="110" class="component-sublabel" style="fill: #8B5CF6;">Internal control, Extension-driven</text>
+
+          <!-- User -->
+          <rect x="100" y="140" width="150" height="80" rx="12" class="component-box" style="fill: rgba(139, 92, 246, 0.1); stroke: #8B5CF6;" data-component="mode-a-user"/>
+          <text x="175" y="170" class="component-label">User</text>
+          <text x="175" y="195" class="component-detail">Provides task via UI</text>
+          <text x="175" y="210" class="component-detail" style="font-family: var(--font-mono);">"Book a flight to SF"</text>
+
+          <!-- Arrow to UI -->
+          <path d="M 175 220 L 175 270" class="connection-line" style="stroke: #8B5CF6;" marker-end="url(#arrow-purple)"/>
+          <text x="185" y="250" class="component-detail" style="fill: #8B5CF6;">Task input</text>
+
+          <!-- Side Panel -->
+          <rect x="100" y="270" width="150" height="80" rx="12" class="component-box extension" data-component="mode-a-ui"/>
+          <text x="175" y="300" class="component-label">Side Panel</text>
+          <text x="175" y="320" class="component-sublabel">React UI</text>
+          <text x="115" y="340" class="component-detail">Displays status</text>
+
+          <!-- Arrow to SW -->
+          <path d="M 250 310 L 300 310" class="connection-line message" marker-end="url(#arrow-amber)"/>
+          <text x="260" y="300" class="component-detail" style="fill: #F59E0B;">TaskMessage</text>
+
+          <!-- Service Worker (Orchestrator) -->
+          <rect x="300" y="140" width="300" height="210" rx="12" class="component-box extension" data-component="mode-a-sw"/>
+          <text x="450" y="170" class="component-label">Service Worker</text>
+          <text x="450" y="190" class="component-sublabel">AgentOrchestrator</text>
+
+          <rect x="320" y="210" width="260" height="120" rx="8" class="component-box" style="fill: rgba(139, 92, 246, 0.15); stroke: #8B5CF6;"/>
+          <text x="450" y="235" class="component-detail" style="font-weight: 600;">Autonomous Loop:</text>
+          <text x="330" y="255" class="component-detail">1. Request LLM plan from bridge</text>
+          <text x="330" y="270" class="component-detail">2. Extract perception data</text>
+          <text x="330" y="285" class="component-detail">3. Execute actions via CDP</text>
+          <text x="330" y="300" class="component-detail">4. Observe outcomes</text>
+          <text x="330" y="315" class="component-detail">5. Loop until goal achieved</text>
+
+          <!-- Arrow to Bridge -->
+          <path d="M 450 350 L 450 410" class="connection-line websocket animated" marker-end="url(#arrow-purple)"/>
+          <text x="460" y="380" class="component-detail" style="fill: #8B5CF6;">WS: LLMRequest</text>
+
+          <!-- Bridge -->
+          <rect x="100" y="410" width="500" height="120" rx="12" class="component-box bridge" data-component="mode-a-bridge"/>
+          <text x="350" y="440" class="component-label">Rust Bridge</text>
+          <text x="350" y="460" class="component-sublabel">LLM Gateway + Policy</text>
+
+          <text x="120" y="485" class="component-detail">• Receives planning requests</text>
+          <text x="120" y="500" class="component-detail">• Calls Anthropic/Ollama LLM</text>
+          <text x="120" y="515" class="component-detail">• Returns next action plan</text>
+
+          <text x="370" y="485" class="component-detail" style="fill: #F59E0B;">• Policy checks (optional)</text>
+          <text x="370" y="500" class="component-detail" style="fill: #F59E0B;">• Token budget tracking</text>
+          <text x="370" y="515" class="component-detail" style="fill: #F59E0B;">• Audit logging</text>
+
+          <!-- Characteristics box -->
+          <rect x="100" y="570" width="500" height="150" rx="12" class="component-box" style="fill: rgba(139, 92, 246, 0.05); stroke: #8B5CF6; stroke-dasharray: 5, 5;"/>
+          <text x="350" y="600" class="component-sublabel" style="fill: #8B5CF6;">Mode A Characteristics</text>
+
+          <text x="120" y="630" class="component-detail" style="fill: #10B981;">✓ Extension drives execution loop</text>
+          <text x="120" y="650" class="component-detail" style="fill: #10B981;">✓ Autonomous multi-step workflows</text>
+          <text x="120" y="670" class="component-detail" style="fill: #10B981;">✓ User provides high-level goals</text>
+          <text x="120" y="690" class="component-detail" style="fill: #10B981;">✓ Bridge provides planning/LLM</text>
+          <text x="120" y="710" class="component-detail" style="fill: #8B5CF6;">Use case: "Agent does the work"</text>
+        </g>
+
+        <!-- Mode B (Right Side) -->
+        <g class="mode-group" data-mode="mode-b">
+          <rect x="750" y="50" width="600" height="500" rx="16" class="component-box" style="fill: rgba(59, 130, 246, 0.05); stroke: #3B82F6; stroke-width: 3;"/>
+          <text x="1050" y="90" class="component-label" style="fill: #3B82F6;">MODE B: MCP Client Control</text>
+          <text x="1050" y="110" class="component-sublabel" style="fill: #3B82F6;">External control, Client-driven</text>
+
+          <!-- MCP Client (External) -->
+          <rect x="800" y="140" width="200" height="120" rx="12" class="component-box" style="fill: rgba(59, 130, 246, 0.1); stroke: #3B82F6;" data-component="mode-b-client"/>
+          <text x="900" y="170" class="component-label">MCP Client</text>
+          <text x="900" y="190" class="component-sublabel">Claude Desktop</text>
+          <text x="820" y="215" class="component-detail">Discovers tools</text>
+          <text x="820" y="230" class="component-detail">Calls tools via stdio</text>
+          <text x="820" y="245" class="component-detail" style="font-family: var(--font-mono);">tools/call execute_action</text>
+
+          <!-- Arrow to Bridge -->
+          <path d="M 1000 200 L 1080 200" class="connection-line" style="stroke: #3B82F6;" marker-end="url(#arrow-blue)"/>
+          <text x="1020" y="190" class="component-detail" style="fill: #3B82F6;">stdio/JSON-RPC</text>
+
+          <!-- Bridge (MCP Server) -->
+          <rect x="1080" y="140" width="220" height="210" rx="12" class="component-box bridge" data-component="mode-b-bridge"/>
+          <text x="1190" y="170" class="component-label">Rust Bridge</text>
+          <text x="1190" y="190" class="component-sublabel">MCP Server</text>
+
+          <rect x="1100" y="210" width="180" height="120" rx="8" class="component-box" style="fill: rgba(59, 130, 246, 0.15); stroke: #3B82F6;"/>
+          <text x="1190" y="235" class="component-detail" style="font-weight: 600;">MCP Tools:</text>
+          <text x="1110" y="255" class="component-detail">• execute_action</text>
+          <text x="1110" y="270" class="component-detail">• navigate</text>
+          <text x="1110" y="285" class="component-detail">• extract_content</text>
+          <text x="1110" y="300" class="component-detail">• screenshot</text>
+          <text x="1110" y="315" class="component-detail">Policy-gated</text>
+
+          <!-- Arrow to Extension -->
+          <path d="M 1190 350 L 1190 410" class="connection-line websocket animated" marker-end="url(#arrow-blue)"/>
+          <text x="1200" y="380" class="component-detail" style="fill: #3B82F6;">WS: Command</text>
+
+          <!-- Extension (Tool Executor) -->
+          <rect x="1080" y="410" width="220" height="120" rx="12" class="component-box extension" data-component="mode-b-extension"/>
+          <text x="1190" y="440" class="component-label">Extension</text>
+          <text x="1190" y="460" class="component-sublabel">Tool Executor</text>
+
+          <text x="1100" y="485" class="component-detail">Receives commands</text>
+          <text x="1100" y="500" class="component-detail">Executes via CDP/CS</text>
+          <text x="1100" y="515" class="component-detail">Returns results</text>
+
+          <!-- Arrow back -->
+          <path d="M 1080 470 L 1000 470 L 1000 260" class="connection-line" style="stroke: #10B981; stroke-dasharray: 3, 3;" marker-end="url(#arrow-green)"/>
+          <text x="1010" y="360" class="component-detail" style="fill: #10B981;">Results</text>
+
+          <!-- User in Mode B -->
+          <rect x="800" y="290" width="200" height="60" rx="12" class="component-box" style="fill: rgba(59, 130, 246, 0.1); stroke: #3B82F6;" data-component="mode-b-user"/>
+          <text x="900" y="315" class="component-label">User</text>
+          <text x="900" y="335" class="component-detail">Interacts with Claude</text>
+
+          <!-- Arrow to client -->
+          <path d="M 900 260 L 900 290" class="connection-line" style="stroke: #3B82F6; stroke-dasharray: 3, 3;" marker-end="url(#arrow-blue)"/>
+          <text x="910" y="280" class="component-detail" style="fill: #3B82F6;">Chat</text>
+
+          <!-- Characteristics box -->
+          <rect x="800" y="570" width="500" height="150" rx="12" class="component-box" style="fill: rgba(59, 130, 246, 0.05); stroke: #3B82F6; stroke-dasharray: 5, 5;"/>
+          <text x="1050" y="600" class="component-sublabel" style="fill: #3B82F6;">Mode B Characteristics</text>
+
+          <text x="820" y="630" class="component-detail" style="fill: #10B981;">✓ External client drives execution</text>
+          <text x="820" y="650" class="component-detail" style="fill: #10B981;">✓ MCP protocol standard interface</text>
+          <text x="820" y="670" class="component-detail" style="fill: #10B981;">✓ Client (Claude) does planning</text>
+          <text x="820" y="690" class="component-detail" style="fill: #10B981;">✓ Extension is tool executor</text>
+          <text x="820" y="710" class="component-detail" style="fill: #3B82F6;">Use case: "Claude uses Momo"</text>
+        </g>
+
+        <!-- Comparison Table -->
+        <g>
+          <rect x="50" y="780" width="1300" height="280" rx="16" class="component-box" style="fill: rgba(245, 158, 11, 0.05); stroke: #F59E0B;"/>
+          <text x="700" y="815" class="component-label" style="fill: #F59E0B;">Side-by-Side Comparison</text>
+
+          <!-- Table headers -->
+          <text x="150" y="850" class="component-sublabel" style="fill: #F59E0B;">Aspect</text>
+          <text x="450" y="850" class="component-sublabel" style="fill: #8B5CF6;">Mode A</text>
+          <text x="950" y="850" class="component-sublabel" style="fill: #3B82F6;">Mode B</text>
+
+          <!-- Row 1: Control -->
+          <text x="70" y="885" class="component-detail" style="font-weight: 600;">Control</text>
+          <text x="300" y="885" class="component-detail">Extension orchestrates</text>
+          <text x="800" y="885" class="component-detail">MCP client orchestrates</text>
+
+          <!-- Row 2: Planning -->
+          <text x="70" y="915" class="component-detail" style="font-weight: 600;">Planning</text>
+          <text x="300" y="915" class="component-detail">Bridge LLM provides plans</text>
+          <text x="800" y="915" class="component-detail">Client (Claude) does planning</text>
+
+          <!-- Row 3: Execution -->
+          <text x="70" y="945" class="component-detail" style="font-weight: 600;">Execution</text>
+          <text x="300" y="945" class="component-detail">Autonomous loop in extension</text>
+          <text x="800" y="945" class="component-detail">Tool-by-tool via MCP calls</text>
+
+          <!-- Row 4: User Role -->
+          <text x="70" y="975" class="component-detail" style="font-weight: 600;">User Role</text>
+          <text x="300" y="975" class="component-detail">Provides goal, observes</text>
+          <text x="800" y="975" class="component-detail">Interacts with Claude</text>
+
+          <!-- Row 5: Interface -->
+          <text x="70" y="1005" class="component-detail" style="font-weight: 600;">Interface</text>
+          <text x="300" y="1005" class="component-detail">Side panel UI</text>
+          <text x="800" y="1005" class="component-detail">MCP stdio protocol</text>
+
+          <!-- Row 6: Use Case -->
+          <text x="70" y="1035" class="component-detail" style="font-weight: 600;">Best For</text>
+          <text x="300" y="1035" class="component-detail">Standalone agent workflows</text>
+          <text x="800" y="1035" class="component-detail">Claude integration/tooling</text>
+
+          <!-- Shared infrastructure note -->
+          <rect x="100" y="880" width="20" height="20" rx="4" fill="rgba(16, 185, 129, 0.2)" stroke="#10B981"/>
+          <rect x="600" y="880" width="20" height="20" rx="4" fill="rgba(16, 185, 129, 0.2)" stroke="#10B981"/>
+          <text x="130" y="895" class="component-detail" style="fill: #10B981; font-size: 10px;">Shared: Bridge, Policy, CDP, Perception</text>
+          <path d="M 120 900 L 120 940 L 610 940 L 610 900" stroke="#10B981" stroke-width="2" fill="none" stroke-dasharray="3, 3"/>
+        </g>
+      </svg>
+
+      <div class="legend">
+        <div class="legend-item">
+          <div class="legend-color purple"></div>
+          <span>Mode A (Autonomous)</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-color blue"></div>
+          <span>Mode B (MCP Client)</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-color green"></div>
+          <span>Shared Infrastructure</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="tooltip" id="tooltip">
+      <div class="tooltip-title" id="tooltip-title"></div>
+      <div class="tooltip-content" id="tooltip-content"></div>
+    </div>
+  </div>
+
+  <script>
+    const componentData = {
+      'mode-a-user': {
+        title: 'Mode A: User',
+        content: 'User provides high-level goal via the side panel UI. Example: "Book a flight to SF". Extension takes over autonomous execution.',
+        code: 'Direct UI interaction'
+      },
+      'mode-a-ui': {
+        title: 'Mode A: Side Panel',
+        content: 'React-based UI for task input and status display. Shows real-time progress as the autonomous agent executes steps.',
+        code: 'src/sidepanel/index.tsx'
+      },
+      'mode-a-sw': {
+        title: 'Mode A: Orchestrator',
+        content: 'Service Worker runs autonomous loop: request plan from LLM, extract perception, execute actions, observe, repeat until goal achieved.',
+        code: 'src/sw/orchestrator.ts (autonomous mode)'
+      },
+      'mode-a-bridge': {
+        title: 'Mode A: Bridge',
+        content: 'Bridge provides LLM planning (Anthropic/Ollama), policy enforcement, and token tracking. Extension requests plans, bridge returns next actions.',
+        code: 'Rust bridge: llm_gateway'
+      },
+      'mode-b-client': {
+        title: 'Mode B: MCP Client',
+        content: 'External client like Claude Desktop. Discovers Momo tools via MCP, calls them as needed during conversation. Claude does the planning.',
+        code: 'Claude Desktop / MCP SDK'
+      },
+      'mode-b-bridge': {
+        title: 'Mode B: MCP Server',
+        content: 'Bridge exposes tools via MCP stdio protocol. Receives tools/call from client, policy-checks, then issues commands to extension.',
+        code: 'Rust bridge: mcp_server'
+      },
+      'mode-b-extension': {
+        title: 'Mode B: Extension',
+        content: 'Extension becomes a tool executor. Receives commands from bridge (via MCP client), executes via CDP/CS, returns results. No autonomous loop.',
+        code: 'src/sw/orchestrator.ts (MCP mode)'
+      },
+      'mode-b-user': {
+        title: 'Mode B: User',
+        content: 'User chats with Claude (MCP client). Claude decides when to use Momo tools. User gets natural language interaction with tool-augmented Claude.',
+        code: 'Claude Desktop chat interface'
+      }
+    };
+
+    const tooltip = document.getElementById('tooltip');
+    const tooltipTitle = document.getElementById('tooltip-title');
+    const tooltipContent = document.getElementById('tooltip-content');
+
+    document.querySelectorAll('[data-component]').forEach(element => {
+      element.addEventListener('mouseenter', (e) => {
+        const componentId = e.target.getAttribute('data-component');
+        const data = componentData[componentId];
+        if (data) {
+          tooltipTitle.textContent = data.title;
+          tooltipContent.innerHTML = `${data.content}<code class="tooltip-code">${data.code}</code>`;
+          tooltip.classList.add('visible');
+        }
+      });
+
+      element.addEventListener('mousemove', (e) => {
+        tooltip.style.left = (e.pageX + 20) + 'px';
+        tooltip.style.top = (e.pageY + 20) + 'px';
+      });
+
+      element.addEventListener('mouseleave', () => {
+        tooltip.classList.remove('visible');
+      });
+    });
+
+    // Mode filtering
+    document.querySelectorAll('.controls .btn').forEach(button => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('.controls .btn').forEach(b => b.classList.remove('active'));
+        button.classList.add('active');
+
+        const mode = button.getAttribute('data-mode');
+        const modeGroups = document.querySelectorAll('.mode-group');
+
+        if (mode === 'both') {
+          modeGroups.forEach(g => g.style.opacity = '1');
+        } else {
+          modeGroups.forEach(g => {
+            if (g.getAttribute('data-mode') === mode) {
+              g.style.opacity = '1';
+            } else {
+              g.style.opacity = '0.15';
+            }
+          });
+        }
+      });
+    });
+  </script>
+</body>
+</html>

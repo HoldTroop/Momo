@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Momo Architecture - Final Aesthetic</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', system-ui, sans-serif;
+            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+            overflow: hidden;
+            color: #e0e0e0;
+        }
+        
+        svg {
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        .header {
+            position: fixed;
+            top: 30px;
+            left: 40px;
+            z-index: 1000;
+            pointer-events: none;
+        }
+        
+        .header h1 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #ff6b35;
+            letter-spacing: -0.01em;
+            margin-bottom: 6px;
+        }
+        
+        .header .subtitle {
+            font-size: 11px;
+            color: #888;
+            font-weight: 400;
+        }
+        
+        /* Background subtle grid */
+        #canvas {
+            background-image: 
+                linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+            background-size: 40px 40px;
+        }
+        
+        /* Swim lanes */
+        .swim-lane {
+            fill: rgba(255, 107, 53, 0.03);
+            stroke: rgba(255, 107, 53, 0.1);
+            stroke-width: 1px;
+            rx: 12;
+        }
+        
+        .swim-lane-label {
+            font-size: 10px;
+            fill: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            font-weight: 500;
+        }
+        
+        /* Links */
+        .link {
+            fill: none;
+            stroke-linecap: round;
+        }
+        
+        .link-primary {
+            stroke: #ff6b35;
+            stroke-width: 3px;
+            filter: drop-shadow(0 0 6px rgba(255, 107, 53, 0.5));
+            animation: pulse 2.5s ease-in-out infinite;
+        }
+        
+        .link-data {
+            stroke: #4a9eff;
+            stroke-width: 2px;
+            filter: drop-shadow(0 0 4px rgba(74, 158, 255, 0.4));
+        }
+        
+        .link-secondary {
+            stroke: #555;
+            stroke-width: 1.5px;
+            stroke-dasharray: 4,4;
+            opacity: 0.5;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { 
+                stroke-width: 3px; 
+                opacity: 1;
+            }
+            50% { 
+                stroke-width: 3.5px; 
+                opacity: 0.85;
+            }
+        }
+        
+        /* Arrow markers */
+        marker path {
+            fill: inherit;
+        }
+        
+        /* Nodes */
+        .node {
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .node:hover {
+            transform: translateY(-2px);
+        }
+        
+        .node-shape {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.3));
+        }
+        
+        .node:hover .node-shape {
+            filter: drop-shadow(0 4px 16px rgba(255, 107, 53, 0.4));
+        }
+        
+        /* Node types */
+        .node-hub .node-shape {
+            fill: #2a2a2a;
+            stroke: #ff6b35;
+            stroke-width: 2px;
+            filter: drop-shadow(0 0 12px rgba(255, 107, 53, 0.4));
+        }
+        
+        .node-browser .node-shape {
+            fill: #2a2a2a;
+            stroke: #555;
+            stroke-width: 1.5px;
+        }
+        
+        .node-bridge .node-shape {
+            fill: #2a2a2a;
+            stroke: #e67e22;
+            stroke-width: 1.5px;
+        }
+        
+        .node-data .node-shape {
+            fill: #1e2a3a;
+            stroke: #4a9eff;
+            stroke-width: 2px;
+            filter: drop-shadow(0 0 8px rgba(74, 158, 255, 0.3));
+        }
+        
+        .node-util .node-shape {
+            fill: #2a2a2a;
+            stroke: #444;
+            stroke-width: 1px;
+        }
+        
+        /* Node labels */
+        .node-label {
+            font-size: 13px;
+            fill: #e0e0e0;
+            text-anchor: middle;
+            pointer-events: none;
+            font-weight: 500;
+        }
+        
+        .node-sublabel {
+            font-size: 11px;
+            fill: #888;
+            text-anchor: middle;
+            pointer-events: none;
+            font-weight: 400;
+        }
+        
+        .node-badge {
+            font-size: 9px;
+            fill: #666;
+            text-anchor: middle;
+            pointer-events: none;
+        }
+        
+        /* Link labels */
+        .link-label {
+            font-size: 10px;
+            fill: #ff6b35;
+            text-anchor: middle;
+            pointer-events: none;
+            font-weight: 500;
+        }
+        
+        /* Legend */
+        .legend {
+            position: fixed;
+            bottom: 30px;
+            right: 40px;
+            background: rgba(42, 42, 42, 0.95);
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid #444;
+            font-size: 10px;
+            color: #888;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+        }
+        
+        .legend-title {
+            font-size: 11px;
+            color: #e0e0e0;
+            font-weight: 600;
+            margin-bottom: 12px;
+            letter-spacing: -0.01em;
+        }
+        
+        .legend-item {
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .legend-line {
+            width: 30px;
+            height: 2px;
+        }
+        
+        .legend-box {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+            border: 1.5px solid;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>MOMO ARCHITECTURE</h1>
+        <div class="subtitle">Policy-compliant autonomous browser agent</div>
+    </div>
+    
+    <svg id="canvas"></svg>
+    
+    <div class="legend">
+        <div class="legend-title">Components</div>
+        <div class="legend-item">
+            <div class="legend-box" style="background: #2a2a2a; border-color: #ff6b35;"></div>
+            <span>Hub nodes</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-box" style="background: #1e2a3a; border-color: #4a9eff;"></div>
+            <span>Data storage</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-line" style="background: #ff6b35; height: 3px; box-shadow: 0 0 6px rgba(255, 107, 53, 0.5);"></div>
+            <span>Primary flow</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-line" style="background: #4a9eff; height: 2px;"></div>
+            <span>Data persistence</span>
+        </div>
+    </div>
+    
+    <script>
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        
+        const svg = d3.select('#canvas')
+            .attr('width', width)
+            .attr('height', height);
+        
+        const g = svg.append('g');
+        
+        // Add zoom/pan
+        const zoom = d3.zoom()
+            .scaleExtent([0.3, 2])
+            .on('zoom', (event) => {
+                g.attr('transform', event.transform);
+            });
+        
+        svg.call(zoom);
+        
+        // Draw swim lanes
+        const lanes = [
+            { x: 100, y: 80, w: 900, h: 220, label: 'BROWSER CONTEXT' },
+            { x: 250, y: 380, w: 600, h: 280, label: 'RUST BRIDGE' }
+        ];
+        
+        lanes.forEach(lane => {
+            g.append('rect')
+                .attr('class', 'swim-lane')
+                .attr('x', lane.x)
+                .attr('y', lane.y)
+                .attr('width', lane.w)
+                .attr('height', lane.h);
+            
+            g.append('text')
+                .attr('class', 'swim-lane-label')
+                .attr('x', lane.x + 20)
+                .attr('y', lane.y + 25)
+                .text(lane.label);
+        });
+        
+        // Node data - strictly from codebase
+        const nodes = [
+            // Browser layer - horizontal spread
+            { id: 'sidepanel', label: 'src/sidepanel', sub: 'React UI', badge: 'MV3', type: 'browser', w: 140, h: 100, x: 150, y: 150 },
+            { id: 'sw', label: 'src/sw', sub: 'orchestrator.ts', badge: '1,020 lines', type: 'hub', w: 160, h: 110, x: 380, y: 140 },
+            { id: 'content', label: 'src/content', sub: 'perception.ts', badge: 'isolated', type: 'browser', w: 140, h: 100, x: 630, y: 150 },
+            { id: 'lib', label: 'src/lib', sub: 'tools · selector', type: 'util', w: 120, h: 80, x: 850, y: 170 },
+            
+            // Bridge layer - center-weighted
+            { id: 'ws', label: 'bridge/src', sub: 'ws_server.rs', badge: ':9090-9100', type: 'hub', w: 160, h: 110, x: 420, y: 460 },
+            { id: 'policy', label: 'bridge/src', sub: 'policy.rs', badge: '771 lines', type: 'hub', w: 160, h: 110, x: 280, y: 520 },
+            { id: 'llm', label: 'bridge/src', sub: 'llm.rs', badge: 'Claude/Ollama', type: 'bridge', w: 150, h: 100, x: 600, y: 530 },
+            
+            // Data layer - bottom
+            { id: 'idb', label: 'IndexedDB', sub: 'Task state · WAL', type: 'data', w: 130, h: 90, x: 250, y: 750 },
+            { id: 'sqlite', label: 'SQLite', sub: 'Audit log', type: 'data', w: 130, h: 90, x: 480, y: 750 }
+        ];
+        
+        const links = [
+            // Primary flow (thick orange glowing)
+            { source: 'sidepanel', target: 'sw', type: 'secondary' },
+            { source: 'sw', target: 'ws', type: 'primary', label: 'ws://:9090' },
+            { source: 'ws', target: 'policy', type: 'primary' },
+            { source: 'policy', target: 'llm', type: 'primary' },
+            
+            // Tool calls (dashed grey)
+            { source: 'sw', target: 'content', type: 'secondary' },
+            { source: 'sw', target: 'lib', type: 'secondary' },
+            { source: 'content', target: 'lib', type: 'secondary' },
+            
+            // Data persistence (blue)
+            { source: 'sw', target: 'idb', type: 'data' },
+            { source: 'policy', target: 'sqlite', type: 'data' }
+        ];
+        
+        // Create arrow markers
+        const defs = svg.append('defs');
+        
+        ['primary', 'data', 'secondary'].forEach(type => {
+            defs.append('marker')
+                .attr('id', `arrow-${type}`)
+                .attr('viewBox', '0 -5 10 10')
+                .attr('refX', 8)
+                .attr('refY', 0)
+                .attr('markerWidth', 6)
+                .attr('markerHeight', 6)
+                .attr('orient', 'auto')
+                .append('path')
+                .attr('d', 'M0,-5L10,0L0,5')
+                .attr('fill', type === 'primary' ? '#ff6b35' : type === 'data' ? '#4a9eff' : '#555');
+        });
+        
+        // Draw links with smooth curves
+        const link = g.selectAll('.link')
+            .data(links)
+            .enter().append('path')
+            .attr('class', d => `link link-${d.type}`)
+            .attr('marker-end', d => `url(#arrow-${d.type})`)
+            .attr('d', d => {
+                const source = nodes.find(n => n.id === d.source);
+                const target = nodes.find(n => n.id === d.target);
+                
+                const sx = source.x + source.w / 2;
+                const sy = source.y + source.h / 2;
+                const tx = target.x + target.w / 2;
+                const ty = target.y + target.h / 2;
+                
+                const dx = tx - sx;
+                const dy = ty - sy;
+                const dr = Math.sqrt(dx * dx + dy * dy) * 0.3;
+                
+                const cx = sx + dx / 2;
+                const cy = sy + dy / 2 - dr;
+                
+                return `M${sx},${sy}Q${cx},${cy},${tx},${ty}`;
+            });
+        
+        // Draw link labels
+        const linkLabel = g.selectAll('.link-label')
+            .data(links.filter(d => d.label))
+            .enter().append('text')
+            .attr('class', 'link-label')
+            .text(d => d.label)
+            .attr('x', d => {
+                const source = nodes.find(n => n.id === d.source);
+                const target = nodes.find(n => n.id === d.target);
+                return (source.x + source.w / 2 + target.x + target.w / 2) / 2;
+            })
+            .attr('y', d => {
+                const source = nodes.find(n => n.id === d.source);
+                const target = nodes.find(n => n.id === d.target);
+                return (source.y + source.h / 2 + target.y + target.h / 2) / 2 - 15;
+            });
+        
+        // Draw nodes
+        const node = g.selectAll('.node')
+            .data(nodes)
+            .enter().append('g')
+            .attr('class', d => `node node-${d.type}`)
+            .attr('transform', d => `translate(${d.x},${d.y})`);
+        
+        node.append('rect')
+            .attr('class', 'node-shape')
+            .attr('width', d => d.w)
+            .attr('height', d => d.h)
+            .attr('rx', 10);
+        
+        node.append('text')
+            .attr('class', 'node-label')
+            .attr('x', d => d.w / 2)
+            .attr('y', d => d.h / 2 - 10)
+            .text(d => d.label);
+        
+        node.append('text')
+            .attr('class', 'node-sublabel')
+            .attr('x', d => d.w / 2)
+            .attr('y', d => d.h / 2 + 8)
+            .text(d => d.sub);
+        
+        node.append('text')
+            .attr('class', 'node-badge')
+            .attr('x', d => d.w / 2)
+            .attr('y', d => d.h / 2 + 24)
+            .text(d => d.badge || '');
+        
+        // Initial zoom to fit
+        const bounds = g.node().getBBox();
+        const scale = 0.85 / Math.max(bounds.width / width, bounds.height / height);
+        const tx = (width - scale * (bounds.x + bounds.width / 2) * 2) / 2;
+        const ty = (height - scale * (bounds.y + bounds.height / 2) * 2) / 2;
+        
+        svg.call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+    </script>
+</body>
+</html>

@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Momo Architecture - Topology Map</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+            -webkit-font-smoothing: antialiased;
+            color: #e0e0e0;
+            background: #0a0a0a;
+            line-height: 1.6;
+            overflow: hidden;
+        }
+        .canvas {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+        }
+        .header {
+            position: absolute;
+            top: 30px;
+            left: 30px;
+            z-index: 100;
+        }
+        h1 {
+            font-size: 16px;
+            font-weight: 500;
+            color: #ff6b35;
+            margin-bottom: 4px;
+            letter-spacing: -0.02em;
+        }
+        .subtitle {
+            font-size: 11px;
+            color: #666;
+            font-weight: 400;
+        }
+        
+        svg {
+            width: 100%;
+            height: 100%;
+        }
+        
+        .node {
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .node:hover circle {
+            stroke-width: 2px;
+        }
+        .node text {
+            font-size: 11px;
+            fill: #e0e0e0;
+            font-family: ui-monospace, monospace;
+        }
+        .node-label-sub {
+            font-size: 9px;
+            fill: #666;
+        }
+        
+        .link {
+            stroke-width: 1.5px;
+            fill: none;
+            opacity: 0.6;
+        }
+        .link-primary {
+            stroke: #ff6b35;
+            stroke-width: 2px;
+            opacity: 1;
+        }
+        .link-data {
+            stroke: #4a9eff;
+            stroke-width: 1.5px;
+        }
+        .link-secondary {
+            stroke: #333;
+            stroke-dasharray: 3,3;
+            opacity: 0.3;
+        }
+        
+        .legend {
+            position: absolute;
+            bottom: 30px;
+            right: 30px;
+            background: #111;
+            padding: 16px;
+            border-left: 2px solid #ff6b35;
+            font-size: 10px;
+            color: #999;
+            width: 220px;
+        }
+        .legend-item {
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .legend-line {
+            width: 30px;
+            height: 2px;
+        }
+        
+        .cluster {
+            fill: none;
+            stroke: #222;
+            stroke-width: 1px;
+            rx: 4;
+        }
+    </style>
+</head>
+<body>
+    <div class="canvas">
+        <div class="header">
+            <h1>MOMO ARCHITECTURE</h1>
+            <div class="subtitle">Enterprise topology · Strict codebase sync</div>
+        </div>
+        
+        <svg id="graph"></svg>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-line" style="background: #ff6b35;"></div>
+                <span>Primary flow</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-line" style="background: #4a9eff;"></div>
+                <span>Data persistence</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-line" style="background: #333; height: 1px;"></div>
+                <span>Utility/secondary</span>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        
+        const svg = d3.select('#graph')
+            .attr('width', width)
+            .attr('height', height);
+        
+        // Define data based on actual codebase structure
+        const nodes = [
+            // Browser layer (top)
+            { id: 'sidepanel', label: 'src/sidepanel', sub: 'React UI', x: 200, y: 150, type: 'browser' },
+            { id: 'sw', label: 'src/sw', sub: 'orchestrator · router', x: 500, y: 150, type: 'browser', hub: true },
+            { id: 'content', label: 'src/content', sub: 'perception', x: 800, y: 150, type: 'browser' },
+            { id: 'lib', label: 'src/lib', sub: 'tools · selector', x: 650, y: 280, type: 'util' },
+            
+            // Bridge layer (middle)
+            { id: 'ws', label: 'bridge/src', sub: 'ws_server · main', x: 500, y: 450, type: 'bridge', hub: true },
+            { id: 'policy', label: 'bridge/src', sub: 'policy.rs', x: 350, y: 600, type: 'bridge', hub: true },
+            { id: 'llm', label: 'bridge/src', sub: 'llm.rs', x: 650, y: 600, type: 'bridge' },
+            
+            // Data layer (bottom)
+            { id: 'idb', label: 'IndexedDB', sub: 'browser storage', x: 250, y: 800, type: 'data' },
+            { id: 'sqlite', label: 'SQLite', sub: 'audit log', x: 450, y: 800, type: 'data' },
+            
+            // External
+            { id: 'claude', label: 'Claude/Ollama', sub: 'LLM API', x: 800, y: 750, type: 'external' }
+        ];
+        
+        const links = [
+            // Primary flow (orange)
+            { source: 'sidepanel', target: 'sw', type: 'secondary' },
+            { source: 'sw', target: 'ws', type: 'primary', label: 'ws://:9090' },
+            { source: 'ws', target: 'policy', type: 'primary' },
+            { source: 'policy', target: 'llm', type: 'primary' },
+            
+            // Tool calls
+            { source: 'sw', target: 'content', type: 'secondary' },
+            { source: 'sw', target: 'lib', type: 'secondary' },
+            { source: 'content', target: 'lib', type: 'secondary' },
+            
+            // Data persistence (blue)
+            { source: 'sw', target: 'idb', type: 'data' },
+            { source: 'policy', target: 'sqlite', type: 'data' },
+            
+            // External API
+            { source: 'llm', target: 'claude', type: 'secondary' }
+        ];
+        
+        // Draw clusters
+        svg.append('rect')
+            .attr('class', 'cluster')
+            .attr('x', 150).attr('y', 80).attr('width', 750).attr('height', 250);
+        
+        svg.append('text')
+            .attr('x', 160).attr('y', 105)
+            .attr('font-size', '10px').attr('fill', '#666').attr('font-family', 'monospace')
+            .text('BROWSER CONTEXT');
+        
+        svg.append('rect')
+            .attr('class', 'cluster')
+            .attr('x', 250).attr('y', 380).attr('width', 550).attr('height', 280);
+        
+        svg.append('text')
+            .attr('x', 260).attr('y', 405)
+            .attr('font-size', '10px').attr('fill', '#666').attr('font-family', 'monospace')
+            .text('RUST BRIDGE');
+        
+        // Draw links with bezier curves
+        const link = svg.selectAll('.link')
+            .data(links)
+            .enter().append('path')
+            .attr('class', d => `link link-${d.type}`)
+            .attr('d', d => {
+                const source = nodes.find(n => n.id === d.source);
+                const target = nodes.find(n => n.id === d.target);
+                const dx = target.x - source.x;
+                const dy = target.y - source.y;
+                const dr = Math.sqrt(dx * dx + dy * dy) * 0.3;
+                return `M${source.x},${source.y}Q${source.x + dx/2},${source.y + dy/2 - dr},${target.x},${target.y}`;
+            });
+        
+        // Draw nodes
+        const node = svg.selectAll('.node')
+            .data(nodes)
+            .enter().append('g')
+            .attr('class', 'node')
+            .attr('transform', d => `translate(${d.x},${d.y})`);
+        
+        node.append('circle')
+            .attr('r', d => d.hub ? 8 : 6)
+            .attr('fill', d => {
+                if (d.type === 'browser') return '#1a1a1a';
+                if (d.type === 'bridge') return '#1a1a1a';
+                if (d.type === 'data') return '#0d1117';
+                if (d.type === 'util') return '#111';
+                return '#0a0a0a';
+            })
+            .attr('stroke', d => {
+                if (d.type === 'browser') return '#333';
+                if (d.type === 'bridge') return '#ff6b35';
+                if (d.type === 'data') return '#4a9eff';
+                if (d.type === 'util') return '#222';
+                return '#333';
+            })
+            .attr('stroke-width', d => d.hub ? 1.5 : 1);
+        
+        node.append('text')
+            .attr('dy', -15)
+            .attr('text-anchor', 'middle')
+            .text(d => d.label);
+        
+        node.append('text')
+            .attr('class', 'node-label-sub')
+            .attr('dy', -4)
+            .attr('text-anchor', 'middle')
+            .text(d => d.sub);
+    </script>
+    
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+</body>
+</html>

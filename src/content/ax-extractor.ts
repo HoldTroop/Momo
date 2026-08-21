@@ -113,10 +113,14 @@ class AxTreeExtractor {
       const response = await chrome.runtime.sendMessage({ type: 'CDP_ATTACH_REQUEST' });
       if (response?.sessionId) {
         this.cdpSessionId = response.sessionId;
-        console.log('[AX Extractor] CDP attached:', this.cdpSessionId);
+        if (import.meta.env.DEV) {
+          console.log('[AX Extractor] CDP attached:', this.cdpSessionId);
+        }
       }
     } catch (e) {
-      console.log('[AX Extractor] CDP not available, using fallback');
+      if (import.meta.env.DEV) {
+        console.log('[AX Extractor] CDP not available, using fallback');
+      }
     }
   }
 
@@ -128,7 +132,9 @@ class AxTreeExtractor {
       case 'CDP_ATTACHED':
         if (message.payload?.sessionId) {
           this.cdpSessionId = message.payload.sessionId;
-          console.log('[AX Extractor] CDP session updated:', this.cdpSessionId);
+          if (import.meta.env.DEV) {
+            console.log('[AX Extractor] CDP session updated:', this.cdpSessionId);
+          }
         }
         sendResponse({ success: true });
         break;
@@ -278,4 +284,6 @@ extractor.startObserving();
 // Export for debugging
 (window as any).__axExtractor = extractor;
 
-console.log('[AX Extractor] Initialized');
+if (import.meta.env.DEV) {
+  console.log('[AX Extractor] Initialized');
+}

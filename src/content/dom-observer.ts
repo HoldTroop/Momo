@@ -72,7 +72,9 @@ class DomObserver {
       return true;
     });
 
-    console.log('[DOM Observer] Initialized');
+    if (import.meta.env.DEV) {
+      console.log('[DOM Observer] Initialized');
+    }
   }
 
   private getSelector(node: Node): string {

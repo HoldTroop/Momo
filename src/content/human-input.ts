@@ -24,7 +24,9 @@ class HumanInputSimulator {
       return true;
     });
 
-    console.log('[Human Input] Initialized (content script fallback - untrusted events)');
+    if (import.meta.env.DEV) {
+      console.log('[Human Input] Initialized (content script fallback - untrusted events)');
+    }
   }
 
   private handleMessage(message: any, sender: chrome.runtime.MessageSender, sendResponse: (response: any) => void) {

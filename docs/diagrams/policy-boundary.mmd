@@ -1,0 +1,33 @@
+graph LR
+    subgraph Untrusted["Untrusted (Extension)"]
+        Orch[AgentOrchestrator]
+        Tools[Tool Executors]
+        Perc[Perception Layer]
+    end
+
+    subgraph TrustBoundary["Trust Boundary"]
+        WS[WebSocket<br/>Auth Token]
+    end
+
+    subgraph Trusted["Trusted (Bridge)"]
+        Policy[Policy Engine]
+        Audit[Audit Log<br/>SQLite]
+        Config[Policy Config<br/>Allowlist]
+    end
+
+    Orch -->|1. Request action| WS
+    WS -->|2. Evaluate| Policy
+    Policy <-->|read| Config
+    Policy -->|3. Log decision| Audit
+    Policy -->|4. Authorize/Deny| WS
+    WS -->|5. Execute if authorized| Orch
+    Orch -->|6. Report outcome| WS
+    WS -->|7. Update audit| Audit
+
+    classDef untrusted fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    classDef boundary fill:#fef3c7,stroke:#d97706,color:#78350f
+    classDef trusted fill:#d1fae5,stroke:#059669,color:#064e3b
+
+    class Orch,Tools,Perc untrusted
+    class WS boundary
+    class Policy,Audit,Config trusted

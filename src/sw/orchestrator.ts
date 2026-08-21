@@ -215,7 +215,9 @@ export class AgentOrchestrator {
         this.state.error = 'Interrupted by service worker restart';
         await this.persistState();
       }
-      console.log('[Orchestrator] Resumed session:', this.activeSessionId);
+      if (import.meta.env.DEV) {
+        console.log('[Orchestrator] Resumed session:', this.activeSessionId);
+      }
     }
   }
 

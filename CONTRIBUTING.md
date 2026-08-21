@@ -6,6 +6,10 @@ and every release gets the same treatment automatically.
 
 ## Code of conduct & principles
 
+For community behavior standards and reporting guidelines, see our [Code of Conduct](CODE_OF_CONDUCT.md).
+
+**Project principles:**
+
 - This project is **policy-compliant and transparent**. Do not introduce
   anti-bot evasion, fingerprint spoofing, or deception techniques. The success
   metric is "authorized, explainable, reversible, and reliable" — not "undetected".

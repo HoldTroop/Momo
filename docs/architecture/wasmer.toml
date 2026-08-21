@@ -1,0 +1,25 @@
+[package]
+name = "momo-architecture-viz"
+version = "0.1.0"
+description = "Interactive architecture visualizations for Momo autonomous browser agent"
+license = "MIT"
+readme = "README.md"
+
+[dependencies]
+"wasmer/static-web-server" = "1"
+
+[fs]
+"/public" = "."
+
+[[command]]
+name = "script"
+module = "wasmer/static-web-server:webserver"
+runner = "https://webc.org/runner/wasi"
+
+[command.annotations.wasi]
+env = []
+main-args = [
+  "--port=8080",
+  "--root=/public",
+  "--log-level=info"
+]

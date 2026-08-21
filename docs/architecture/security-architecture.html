@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Security Architecture - Momo</title>
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+  <div class="page-container">
+    <header class="page-header">
+      <div class="breadcrumb">
+        <a href="../../README.md">Momo</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="../ARCHITECTURE.md">Architecture</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="index.html">Visualizations</a>
+        <span class="breadcrumb-separator">/</span>
+        <span>Security Architecture</span>
+      </div>
+      <h1 class="page-title">Security Architecture</h1>
+      <p class="page-description">
+        Policy engine, trust boundaries, and the fail-closed model. Shows how the bridge enforces origin allowlists, token budgets, and audit logging for every action.
+      </p>
+    </header>
+
+    <div class="diagram-container">
+      <svg viewBox="0 0 1400 1000" xmlns="http://www.w3.org/2000/svg" class="diagram-svg">
+        <defs>
+          <marker id="arrow-purple" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#8B5CF6" />
+          </marker>
+          <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#3B82F6" />
+          </marker>
+          <marker id="arrow-amber" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#F59E0B" />
+          </marker>
+          <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#10B981" />
+          </marker>
+          <marker id="arrow-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#EF4444" />
+          </marker>
+
+          <!-- Pattern for untrusted zone -->
+          <pattern id="untrusted-pattern" patternUnits="userSpaceOnUse" width="10" height="10">
+            <path d="M 0 10 L 10 0" stroke="rgba(239, 68, 68, 0.2)" stroke-width="1"/>
+          </pattern>
+
+          <!-- Pattern for trusted zone -->
+          <pattern id="trusted-pattern" patternUnits="userSpaceOnUse" width="10" height="10">
+            <path d="M 0 0 L 10 10" stroke="rgba(16, 185, 129, 0.2)" stroke-width="1"/>
+          </pattern>
+        </defs>
+
+        <!-- Untrusted Zone (Extension) -->
+        <g>
+          <rect x="50" y="50" width="550" height="650" rx="16" class="component-box untrusted" style="fill: url(#untrusted-pattern); stroke: #EF4444; stroke-width: 3;"/>
+          <text x="70" y="85" class="component-label" style="fill: #EF4444;">UNTRUSTED ZONE</text>
+          <text x="70" y="105" class="component-sublabel" style="fill: #EF4444;">Chrome Extension (Browser Context)</text>
+
+          <!-- Extension Components -->
+          <rect x="100" y="140" width="200" height="100" rx="12" class="component-box" style="fill: rgba(239, 68, 68, 0.1); stroke: #EF4444;" data-component="ui-untrusted"/>
+          <text x="200" y="170" class="component-label">Side Panel UI</text>
+          <text x="200" y="190" class="component-sublabel">User Interface</text>
+          <text x="120" y="215" class="component-detail">No authorization</text>
+          <text x="120" y="230" class="component-detail">capability</text>
+
+          <rect x="350" y="140" width="200" height="100" rx="12" class="component-box" style="fill: rgba(239, 68, 68, 0.1); stroke: #EF4444;" data-component="sw-untrusted"/>
+          <text x="450" y="170" class="component-label">Service Worker</text>
+          <text x="450" y="190" class="component-sublabel">Orchestrator</text>
+          <text x="370" y="215" class="component-detail">Cannot self-</text>
+          <text x="370" y="230" class="component-detail">authorize actions</text>
+
+          <rect x="100" y="280" width="450" height="140" rx="12" class="component-box" style="fill: rgba(239, 68, 68, 0.1); stroke: #EF4444;" data-component="cs-untrusted"/>
+          <text x="325" y="310" class="component-label">Content Scripts</text>
+          <text x="325" y="330" class="component-sublabel">Injected into Web Pages</text>
+          <text x="120" y="360" class="component-detail">• Extracts page data (perception)</text>
+          <text x="120" y="375" class="component-detail">• Redacts sensitive data locally</text>
+          <text x="120" y="390" class="component-detail">• Cannot execute privileged actions</text>
+          <text x="120" y="405" class="component-detail">• Isolated per-tab context</text>
+
+          <!-- Security properties -->
+          <rect x="100" y="460" width="450" height="220" rx="12" class="component-box" style="fill: rgba(239, 68, 68, 0.05); stroke: #EF4444; stroke-dasharray: 5, 5;"/>
+          <text x="325" y="490" class="component-sublabel" style="fill: #EF4444;">Untrusted Zone Properties</text>
+
+          <text x="120" y="520" class="component-detail" style="fill: #EF4444;">✗ No policy decisions</text>
+          <text x="120" y="540" class="component-detail">Extension cannot authorize itself</text>
+
+          <text x="120" y="570" class="component-detail" style="fill: #EF4444;">✗ No credential storage</text>
+          <text x="120" y="590" class="component-detail">API keys, tokens live in bridge</text>
+
+          <text x="120" y="620" class="component-detail" style="fill: #EF4444;">✗ No audit log writes</text>
+          <text x="120" y="640" class="component-detail">Cannot tamper with audit trail</text>
+
+          <text x="120" y="670" class="component-detail" style="fill: #10B981;">✓ Data minimization</text>
+          <text x="120" y="690" class="component-detail">Redaction at collection point</text>
+        </g>
+
+        <!-- Trust Boundary -->
+        <g>
+          <rect x="630" y="50" width="140" height="650" rx="16" class="component-box boundary" style="fill: rgba(245, 158, 11, 0.1); stroke: #F59E0B; stroke-width: 4;"/>
+          <text x="700" y="85" class="component-label" style="fill: #F59E0B; writing-mode: tb; text-anchor: middle;">TRUST BOUNDARY</text>
+
+          <!-- WebSocket with Auth -->
+          <rect x="650" y="320" width="100" height="120" rx="12" class="component-box" style="fill: rgba(245, 158, 11, 0.2); stroke: #F59E0B;" data-component="ws-boundary"/>
+          <text x="700" y="350" class="component-label" style="fill: #F59E0B;">WebSocket</text>
+          <text x="700" y="375" class="component-sublabel">Auth Token</text>
+          <text x="660" y="400" class="component-detail" style="font-family: var(--font-mono);">Bearer:</text>
+          <text x="660" y="415" class="component-detail" style="font-family: var(--font-mono);">sha256(...)</text>
+
+          <!-- Enforcement icons -->
+          <circle cx="700" cy="200" r="30" fill="rgba(245, 158, 11, 0.2)" stroke="#F59E0B" stroke-width="2"/>
+          <text x="700" y="210" class="component-label" style="fill: #F59E0B; font-size: 24px;">🔒</text>
+
+          <circle cx="700" cy="540" r="30" fill="rgba(245, 158, 11, 0.2)" stroke="#F59E0B" stroke-width="2"/>
+          <text x="700" y="550" class="component-label" style="fill: #F59E0B; font-size: 24px;">🛡️</text>
+
+          <!-- Arrows showing enforcement -->
+          <path d="M 600 350 L 650 350" class="connection-line" style="stroke: #EF4444;" marker-end="url(#arrow-red)"/>
+          <text x="610" y="340" class="component-detail" style="fill: #EF4444; font-size: 10px;">Request</text>
+
+          <path d="M 750 390 L 800 390" class="connection-line" style="stroke: #10B981;" marker-end="url(#arrow-green)"/>
+          <text x="760" y="380" class="component-detail" style="fill: #10B981; font-size: 10px;">Authorized</text>
+
+          <path d="M 750 410 L 800 410" class="connection-line" style="stroke: #EF4444;" marker-end="url(#arrow-red)"/>
+          <text x="760" y="425" class="component-detail" style="fill: #EF4444; font-size: 10px;">Denied</text>
+        </g>
+
+        <!-- Trusted Zone (Bridge) -->
+        <g>
+          <rect x="800" y="50" width="550" height="650" rx="16" class="component-box trusted" style="fill: url(#trusted-pattern); stroke: #10B981; stroke-width: 3;"/>
+          <text x="820" y="85" class="component-label" style="fill: #10B981;">TRUSTED ZONE</text>
+          <text x="820" y="105" class="component-sublabel" style="fill: #10B981;">Rust Bridge (Isolated Process)</text>
+
+          <!-- Policy Engine -->
+          <rect x="850" y="140" width="450" height="200" rx="12" class="component-box" style="fill: rgba(16, 185, 129, 0.1); stroke: #10B981;" data-component="policy-engine"/>
+          <text x="1075" y="170" class="component-label">Policy Engine</text>
+          <text x="1075" y="190" class="component-sublabel">Authorization Authority</text>
+
+          <text x="870" y="220" class="component-detail" style="font-weight: 600;">1. Origin Allowlist</text>
+          <text x="885" y="240" class="component-detail">Check MCP client origin</text>
+          <text x="885" y="255" class="component-detail" style="font-family: var(--font-mono);">allowed_origins: ["claude-desktop"]</text>
+
+          <text x="870" y="285" class="component-detail" style="font-weight: 600;">2. Token Budget</text>
+          <text x="885" y="305" class="component-detail">Track LLM token usage</text>
+          <text x="885" y="320" class="component-detail" style="font-family: var(--font-mono);">remaining: 15000 / 50000</text>
+
+          <!-- Policy Config -->
+          <rect x="850" y="370" width="210" height="120" rx="12" class="component-box" style="fill: rgba(16, 185, 129, 0.15); stroke: #10B981;" data-component="policy-config"/>
+          <text x="955" y="400" class="component-label">Policy Config</text>
+          <text x="955" y="420" class="component-sublabel">TOML</text>
+          <text x="870" y="445" class="component-detail" style="font-family: var(--font-mono);">[policy]</text>
+          <text x="870" y="460" class="component-detail" style="font-family: var(--font-mono);">default = "deny"</text>
+          <text x="870" y="475" class="component-detail" style="font-family: var(--font-mono);">allowed_origins =</text>
+          <text x="870" y="490" class="component-detail" style="font-family: var(--font-mono);">  ["claude"]</text>
+
+          <!-- Audit Log -->
+          <rect x="1090" y="370" width="210" height="120" rx="12" class="component-box" style="fill: rgba(16, 185, 129, 0.15); stroke: #10B981;" data-component="audit-log"/>
+          <text x="1195" y="400" class="component-label">Audit Log</text>
+          <text x="1195" y="420" class="component-sublabel">SQLite</text>
+          <text x="1110" y="445" class="component-detail" style="font-weight: 600;">Immutable Record</text>
+          <text x="1110" y="465" class="component-detail">• Timestamp</text>
+          <text x="1110" y="480" class="component-detail">• Origin</text>
+          <text x="1110" y="495" class="component-detail">• Action + params</text>
+          <text x="1110" y="510" class="component-detail">• Decision + outcome</text>
+
+          <!-- LLM Gateway -->
+          <rect x="850" y="520" width="210" height="100" rx="12" class="component-box" style="fill: rgba(16, 185, 129, 0.1); stroke: #10B981;" data-component="llm-gateway"/>
+          <text x="955" y="550" class="component-label">LLM Gateway</text>
+          <text x="955" y="570" class="component-sublabel">API Keys Stored</text>
+          <text x="870" y="595" class="component-detail">Anthropic API key</text>
+          <text x="870" y="610" class="component-detail">Ollama endpoint</text>
+
+          <!-- MCP Server -->
+          <rect x="1090" y="520" width="210" height="100" rx="12" class="component-box" style="fill: rgba(16, 185, 129, 0.1); stroke: #10B981;" data-component="mcp-server"/>
+          <text x="1195" y="550" class="component-label">MCP Server</text>
+          <text x="1195" y="570" class="component-sublabel">Tool Definitions</text>
+          <text x="1110" y="595" class="component-detail">Exposes capabilities</text>
+          <text x="1110" y="610" class="component-detail">to external clients</text>
+
+          <!-- Trusted properties -->
+          <text x="870" y="660" class="component-detail" style="fill: #10B981;">✓ Sole authorization authority</text>
+          <text x="870" y="680" class="component-detail" style="fill: #10B981;">✓ Immutable audit trail</text>
+          <text x="870" y="700" class="component-detail" style="fill: #10B981;">✓ Credential isolation</text>
+        </g>
+
+        <!-- Flow diagram -->
+        <g>
+          <rect x="50" y="750" width="1300" height="220" rx="16" class="component-box" style="fill: rgba(59, 130, 246, 0.05); stroke: #3B82F6;"/>
+          <text x="70" y="780" class="component-label" style="fill: #3B82F6;">Fail-Closed Authorization Flow</text>
+
+          <!-- Step boxes -->
+          <rect x="100" y="810" width="140" height="80" rx="8" class="component-box" style="fill: rgba(239, 68, 68, 0.1); stroke: #EF4444;"/>
+          <text x="170" y="835" class="component-sublabel">1. Extension</text>
+          <text x="170" y="855" class="component-detail">Requests action</text>
+          <text x="170" y="875" class="component-detail" style="fill: #EF4444;">No auth power</text>
+
+          <path d="M 240 850 L 290 850" class="connection-line" style="stroke: #F59E0B;" marker-end="url(#arrow-amber)"/>
+
+          <rect x="290" y="810" width="140" height="80" rx="8" class="component-box" style="fill: rgba(245, 158, 11, 0.1); stroke: #F59E0B;"/>
+          <text x="360" y="835" class="component-sublabel">2. Boundary</text>
+          <text x="360" y="855" class="component-detail">Check token</text>
+          <text x="360" y="875" class="component-detail" style="fill: #F59E0B;">Enforce auth</text>
+
+          <path d="M 430 850 L 480 850" class="connection-line" style="stroke: #10B981;" marker-end="url(#arrow-green)"/>
+
+          <rect x="480" y="810" width="140" height="80" rx="8" class="component-box" style="fill: rgba(16, 185, 129, 0.1); stroke: #10B981;"/>
+          <text x="550" y="835" class="component-sublabel">3. Policy</text>
+          <text x="550" y="855" class="component-detail">Evaluate</text>
+          <text x="550" y="875" class="component-detail" style="fill: #10B981;">Decide</text>
+
+          <!-- Decision split -->
+          <path d="M 620 850 L 670 830" class="connection-line" style="stroke: #10B981;" marker-end="url(#arrow-green)"/>
+          <path d="M 620 850 L 670 870" class="connection-line" style="stroke: #EF4444;" marker-end="url(#arrow-red)"/>
+
+          <!-- Authorized path -->
+          <rect x="670" y="790" width="140" height="60" rx="8" class="component-box" style="fill: rgba(16, 185, 129, 0.15); stroke: #10B981;"/>
+          <text x="740" y="815" class="component-sublabel" style="fill: #10B981;">4a. AUTHORIZE</text>
+          <text x="740" y="835" class="component-detail">Log + execute</text>
+
+          <path d="M 810 820 L 860 820" class="connection-line" style="stroke: #10B981;" marker-end="url(#arrow-green)"/>
+
+          <rect x="860" y="790" width="140" height="60" rx="8" class="component-box" style="fill: rgba(16, 185, 129, 0.1); stroke: #10B981;"/>
+          <text x="930" y="815" class="component-sublabel">5. Execute</text>
+          <text x="930" y="835" class="component-detail">With auth flag</text>
+
+          <path d="M 1000 820 L 1050 820" class="connection-line" style="stroke: #3B82F6;" marker-end="url(#arrow-blue)"/>
+
+          <rect x="1050" y="790" width="140" height="60" rx="8" class="component-box" style="fill: rgba(59, 130, 246, 0.1); stroke: #3B82F6;"/>
+          <text x="1120" y="815" class="component-sublabel">6. Report</text>
+          <text x="1120" y="835" class="component-detail">Outcome logged</text>
+
+          <!-- Denied path -->
+          <rect x="670" y="860" width="140" height="60" rx="8" class="component-box" style="fill: rgba(239, 68, 68, 0.15); stroke: #EF4444;"/>
+          <text x="740" y="885" class="component-sublabel" style="fill: #EF4444;">4b. DENY</text>
+          <text x="740" y="905" class="component-detail">Log + reject</text>
+
+          <path d="M 810 890 L 1050 890" class="connection-line" style="stroke: #EF4444; stroke-dasharray: 5, 5;" marker-end="url(#arrow-red)"/>
+
+          <rect x="1050" y="860" width="140" height="60" rx="8" class="component-box" style="fill: rgba(239, 68, 68, 0.1); stroke: #EF4444;"/>
+          <text x="1120" y="885" class="component-sublabel">Error</text>
+          <text x="1120" y="905" class="component-detail">No execution</text>
+
+          <!-- Key insight -->
+          <rect x="1220" y="810" width="110" height="80" rx="8" class="component-box" style="fill: rgba(245, 158, 11, 0.1); stroke: #F59E0B;"/>
+          <text x="1275" y="835" class="component-detail" style="fill: #F59E0B; font-weight: 600;">Default:</text>
+          <text x="1275" y="855" class="component-detail" style="fill: #F59E0B; font-weight: 600;">DENY</text>
+          <text x="1275" y="875" class="component-detail">Fail-closed</text>
+        </g>
+      </svg>
+
+      <div class="legend">
+        <div class="legend-item">
+          <div class="legend-color red"></div>
+          <span>Untrusted Zone (Extension)</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-color amber"></div>
+          <span>Trust Boundary (Auth enforcement)</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-color green"></div>
+          <span>Trusted Zone (Bridge)</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="tooltip" id="tooltip">
+      <div class="tooltip-title" id="tooltip-title"></div>
+      <div class="tooltip-content" id="tooltip-content"></div>
+    </div>
+  </div>
+
+  <script>
+    const componentData = {
+      'ui-untrusted': {
+        title: 'Side Panel (Untrusted)',
+        content: 'User interface has no authorization capability. Cannot approve actions or access credentials. All authorization requests go through the bridge.',
+        code: 'src/sidepanel/index.tsx'
+      },
+      'sw-untrusted': {
+        title: 'Service Worker (Untrusted)',
+        content: 'Orchestrator cannot self-authorize. Must receive commands with authorized=true flag from bridge. Fail-closed: no auth flag = no execution.',
+        code: 'src/sw/orchestrator.ts'
+      },
+      'cs-untrusted': {
+        title: 'Content Scripts (Untrusted)',
+        content: 'Isolated per-tab. Extracts perception data with local redaction. Cannot execute privileged actions or access credentials. Data-only context.',
+        code: 'src/content/'
+      },
+      'ws-boundary': {
+        title: 'WebSocket Trust Boundary',
+        content: 'All messages cross here with auth token validation. Bridge checks bearer token (SHA-256) before processing any request. Fail-closed on invalid/missing token.',
+        code: 'Bridge: connection_manager validates token'
+      },
+      'policy-engine': {
+        title: 'Policy Engine',
+        content: 'Sole authorization authority. Checks: (1) Origin allowlist, (2) Token budget, (3) Risk classification. Logs every decision to immutable audit trail. Default: deny.',
+        code: 'Rust bridge: policy_engine'
+      },
+      'policy-config': {
+        title: 'Policy Configuration',
+        content: 'TOML config defining allowed origins, token limits, risk thresholds. User-editable but changes require bridge restart. Version-controlled with audit trail.',
+        code: 'config/policy.toml'
+      },
+      'audit-log': {
+        title: 'Audit Log (Immutable)',
+        content: 'SQLite database recording every authorization decision and execution outcome. Write-once, append-only. Includes timestamp, origin, action, decision, and result.',
+        code: 'SQLite: audit_log table'
+      },
+      'llm-gateway': {
+        title: 'LLM Gateway',
+        content: 'API keys and credentials stored only in bridge. Extension never sees keys. Multi-provider support: Anthropic API, Ollama local.',
+        code: 'Rust bridge: llm_gateway'
+      },
+      'mcp-server': {
+        title: 'MCP Server',
+        content: 'Exposes Momo capabilities as MCP tools. Receives tool calls from external clients, translates to policy-checked commands for extension.',
+        code: 'Rust bridge: mcp_server'
+      }
+    };
+
+    const tooltip = document.getElementById('tooltip');
+    const tooltipTitle = document.getElementById('tooltip-title');
+    const tooltipContent = document.getElementById('tooltip-content');
+
+    document.querySelectorAll('[data-component]').forEach(element => {
+      element.addEventListener('mouseenter', (e) => {
+        const componentId = e.target.getAttribute('data-component');
+        const data = componentData[componentId];
+        if (data) {
+          tooltipTitle.textContent = data.title;
+          tooltipContent.innerHTML = `${data.content}<code class="tooltip-code">${data.code}</code>`;
+          tooltip.classList.add('visible');
+        }
+      });
+
+      element.addEventListener('mousemove', (e) => {
+        tooltip.style.left = (e.pageX + 20) + 'px';
+        tooltip.style.top = (e.pageY + 20) + 'px';
+      });
+
+      element.addEventListener('mouseleave', () => {
+        tooltip.classList.remove('visible');
+      });
+    });
+  </script>
+</body>
+</html>
