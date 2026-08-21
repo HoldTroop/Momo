@@ -5,7 +5,7 @@
 **Policy-compliant autonomous AI browser agent operating in local context with transparent interaction**
 
 [![Build Status](https://img.shields.io/github/actions/workflow/status/HoldTroop/Momo/ci.yml?branch=main)](https://github.com/HoldTroop/Momo/actions)
-[![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE.md)
 [![Version](https://img.shields.io/badge/version-0.3.0-green.svg)](https://github.com/HoldTroop/Momo/releases)
 [![Chrome](https://img.shields.io/badge/chrome-118%2B-orange.svg)](https://www.google.com/chrome/)
 [![Manifest V3](https://img.shields.io/badge/manifest-v3-blue.svg)](https://developer.chrome.com/docs/extensions/mv3/)
@@ -820,7 +820,7 @@ Current test coverage:
 
 ## License
 
-This project is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE). Any noncommercial use is permitted; commercial use requires a separate license from the author.
+This project is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). Any noncommercial use is permitted; commercial use requires a separate license from the author.
 
 ---
 

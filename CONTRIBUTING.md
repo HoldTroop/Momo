@@ -625,7 +625,7 @@ We deeply appreciate your time and effort in making Momo better!
 
 **Thank you for contributing to Momo!**
 
-[Code of Conduct](CODE_OF_CONDUCT.md) · [Security Policy](SECURITY.md) · [License](LICENSE)
+[Code of Conduct](CODE_OF_CONDUCT.md) · [Security Policy](SECURITY.md) · [License](LICENSE.md)
 
 **Made with focus by the Momo community**
 

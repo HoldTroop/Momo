@@ -374,7 +374,7 @@ For security-related questions that are not vulnerability reports:
 
 **Thank you for helping keep Momo and our community safe.**
 
-[Code of Conduct](CODE_OF_CONDUCT.md) · [Contributing](CONTRIBUTING.md) · [License](LICENSE)
+[Code of Conduct](CODE_OF_CONDUCT.md) · [Contributing](CONTRIBUTING.md) · [License](LICENSE.md)
 
 *Last updated: August 2026*
 *The Momo Security Team*
