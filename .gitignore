@@ -5,11 +5,35 @@ target/
 
 # Local secrets / MCP config (may contain tokens)
 .mcp.json
+.env
+.env.*
+.env.local
+.env.*.local
 
 # OS / editor noise
 .DS_Store
 *.log
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*~
+
+# Test coverage
+coverage/
+.nyc_output/
+*.lcov
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
 
 # Local agent tooling (Kilo Code) — machine-specific, never commit
 .kilo/
 .kilocode/
+kilo.json

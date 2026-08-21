@@ -17,6 +17,25 @@ Category mapping to Conventional Commit types:
 
 ## [Unreleased]
 
+## [v0.1.4] — 2026-08-21
+
+**Momo Architecture Visualization** - Critical TypeScript module augmentation fix
+
+### 🐛 Fixes
+
+- **Custom shape registration** — Fixed TypeScript module augmentation conflicts preventing custom shapes from being recognized by tldraw at runtime. Consolidated all shape type declarations from individual files into a single `src/shapes/types.ts` file, ensuring proper type system merging and shape registration.
+  - Created `src/shapes/types.ts` with unified `declare module "tldraw"` block
+  - Updated all shape utility files to import from consolidated types
+  - Removed individual module augmentation blocks from PackageShapeUtil, FileShapeUtil, ClassShapeUtil, FunctionShapeUtil, and RouteShapeUtil
+  - Verified TypeScript compilation and runtime shape recognition
+
+### 🧰 Chore / Internal
+
+- Build and deployment verified on Wasmer Edge
+- Production URL: https://momo-architecture-map.wasmer.app
+
+---
+
 Security remediation of the external audit (`audit-report.md`, audited revision
 `bb99b6af`). Fixes 2 critical, 6 high, 4 medium, and 4 low findings, plus two
 additional Rust build blockers the audit missed. `chrome.debugger` is now the

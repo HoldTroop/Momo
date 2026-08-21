@@ -1,0 +1,5 @@
+kind: wasmer.io/App.v0
+name: momo-architecture-viz
+owner: mdabir183223
+package: .
+app_id: da_Ra7IetdUqVy0

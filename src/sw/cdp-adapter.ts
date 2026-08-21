@@ -105,7 +105,9 @@ class CdpAdapter {
             this.removeSessionListeners(session);
             this.sessions.delete(sessionId);
             this.sessionDetachedCallbacks.forEach(cb => cb(sessionId));
-            console.log('[CDP Adapter] Session detached:', sessionId, reason);
+            if (import.meta.env.DEV) {
+              console.log('[CDP Adapter] Session detached:', sessionId, reason);
+            }
           },
         };
 
@@ -126,7 +128,9 @@ class CdpAdapter {
         chrome.debugger.onEvent.addListener(session._eventListener);
         chrome.debugger.onDetach.addListener(session._detachListener);
 
-        console.log('[CDP Adapter] Attached to target:', targetId, 'session:', sessionId);
+        if (import.meta.env.DEV) {
+          console.log('[CDP Adapter] Attached to target:', targetId, 'session:', sessionId);
+        }
         resolve(sessionId);
       });
     });

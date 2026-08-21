@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Momo Architecture Visualizations</title>
+  <link rel="stylesheet" href="assets/styles.css">
+  <style>
+    .diagram-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 1.5rem;
+      width: 100%;
+      max-width: 1400px;
+      margin-top: 2rem;
+    }
+
+    .diagram-card {
+      background: var(--glass-bg);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-lg);
+      padding: 1.5rem;
+      text-decoration: none;
+      color: inherit;
+      transition: all 0.3s;
+      backdrop-filter: blur(10px);
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .diagram-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 8px 24px var(--glass-shadow);
+      border-color: var(--purple);
+    }
+
+    .diagram-card-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+    }
+
+    .diagram-card-icon.overview {
+      background: rgba(139, 92, 246, 0.2);
+      color: var(--purple);
+    }
+
+    .diagram-card-icon.communication {
+      background: rgba(59, 130, 246, 0.2);
+      color: var(--blue);
+    }
+
+    .diagram-card-icon.websocket {
+      background: rgba(245, 158, 11, 0.2);
+      color: var(--amber);
+    }
+
+    .diagram-card-icon.tool {
+      background: rgba(16, 185, 129, 0.2);
+      color: var(--green);
+    }
+
+    .diagram-card-icon.perception {
+      background: rgba(236, 72, 153, 0.2);
+      color: #EC4899;
+    }
+
+    .diagram-card-icon.security {
+      background: rgba(239, 68, 68, 0.2);
+      color: var(--red);
+    }
+
+    .diagram-card-icon.modes {
+      background: rgba(168, 85, 247, 0.2);
+      color: #A855F7;
+    }
+
+    .diagram-card-title {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .diagram-card-description {
+      font-size: 0.875rem;
+      color: var(--text-secondary);
+      line-height: 1.6;
+    }
+
+    .diagram-card-meta {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    .intro-section {
+      max-width: 800px;
+      margin-bottom: 3rem;
+    }
+
+    .intro-section h2 {
+      font-size: 1.5rem;
+      margin-bottom: 1rem;
+      color: var(--text-primary);
+    }
+
+    .intro-section p {
+      color: var(--text-secondary);
+      margin-bottom: 0.75rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="page-container">
+    <header class="page-header">
+      <div class="breadcrumb">
+        <a href="../../README.md">Momo</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="../ARCHITECTURE.md">Architecture</a>
+        <span class="breadcrumb-separator">/</span>
+        <span>Visualizations</span>
+      </div>
+      <h1 class="page-title">Momo Architecture Visualizations</h1>
+      <p class="page-description">
+        Interactive diagrams showing how Momo's autonomous browser agent works under the hood—from system topology to security boundaries.
+      </p>
+    </header>
+
+    <main>
+      <section class="intro-section">
+        <h2>About These Diagrams</h2>
+        <p>
+          These visualizations provide a detailed look at Momo's architecture, showing how the Chrome extension, Rust bridge, and browser runtime coordinate to enable autonomous web interaction with security guarantees.
+        </p>
+        <p>
+          Each diagram is interactive—hover over components for details, click to expand sections, and use the controls to focus on specific layers or flows.
+        </p>
+      </section>
+
+      <div class="diagram-grid">
+        <a href="overview.html" class="diagram-card">
+          <div class="diagram-card-icon overview">🏗️</div>
+          <h3 class="diagram-card-title">Overall Architecture</h3>
+          <p class="diagram-card-description">
+            Complete system topology showing the 5 layers: Extension UI, Service Worker, Content Scripts, Rust Bridge, and Browser Runtime. The foundational view of how everything connects.
+          </p>
+          <span class="diagram-card-meta">5 layers · 12 components</span>
+        </a>
+
+        <a href="communication-layers.html" class="diagram-card">
+          <div class="diagram-card-icon communication">💬</div>
+          <h3 class="diagram-card-title">Communication Layers</h3>
+          <p class="diagram-card-description">
+            Deep dive into messaging patterns: chrome.runtime, WebSocket channels, CDP protocol, and how messages flow between the extension and bridge with type safety.
+          </p>
+          <span class="diagram-card-meta">4 protocols · 6 message types</span>
+        </a>
+
+        <a href="websocket-patterns.html" class="diagram-card">
+          <div class="diagram-card-icon websocket">🔌</div>
+          <h3 class="diagram-card-title">WebSocket Patterns</h3>
+          <p class="diagram-card-description">
+            RPC, pub/sub, and command-channel flows over the extension↔bridge WebSocket. Shows request/response cycles, event streams, and how the bridge coordinates actions.
+          </p>
+          <span class="diagram-card-meta">3 patterns · Auth token flow</span>
+        </a>
+
+        <a href="tool-execution-flow.html" class="diagram-card">
+          <div class="diagram-card-icon tool">⚙️</div>
+          <h3 class="diagram-card-title">Tool Execution Flow</h3>
+          <p class="diagram-card-description">
+            Security-gated execution pipeline from MCP tool call to browser action. Policy checks, element extraction, CDP dispatch, and audit logging in one complete cycle.
+          </p>
+          <span class="diagram-card-meta">9 steps · Fail-closed policy</span>
+        </a>
+
+        <a href="perception-system.html" class="diagram-card">
+          <div class="diagram-card-icon perception">👁️</div>
+          <h3 class="diagram-card-title">Perception System</h3>
+          <p class="diagram-card-description">
+            How Momo "sees" web pages: AX tree extraction, DOM observation, element reference stabilization, and the redaction engine that protects sensitive data.
+          </p>
+          <span class="diagram-card-meta">Redaction · el_XX refs · MutationObserver</span>
+        </a>
+
+        <a href="security-architecture.html" class="diagram-card">
+          <div class="diagram-card-icon security">🔒</div>
+          <h3 class="diagram-card-title">Security Architecture</h3>
+          <p class="diagram-card-description">
+            Policy engine, trust boundaries, and the fail-closed model. Shows how the bridge enforces origin allowlists, token budgets, and audit logging for every action.
+          </p>
+          <span class="diagram-card-meta">3 zones · Immutable audit log</span>
+        </a>
+
+        <a href="operating-modes.html" class="diagram-card">
+          <div class="diagram-card-icon modes">🔀</div>
+          <h3 class="diagram-card-title">Operating Modes</h3>
+          <p class="diagram-card-description">
+            Mode A (autonomous orchestration) vs Mode B (MCP client control). Compares the two execution paths and shows how the architecture supports both paradigms.
+          </p>
+          <span class="diagram-card-meta">2 modes · Shared infrastructure</span>
+        </a>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

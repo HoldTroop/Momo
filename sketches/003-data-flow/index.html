@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Momo Architecture - Data Flow</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+            -webkit-font-smoothing: antialiased;
+            color: #e0e0e0;
+            background: #0a0a0a;
+            line-height: 1.6;
+            padding: 40px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            font-size: 16px;
+            font-weight: 500;
+            color: #ff6b35;
+            margin-bottom: 4px;
+            letter-spacing: -0.02em;
+        }
+        .subtitle {
+            font-size: 11px;
+            color: #666;
+            margin-bottom: 40px;
+            font-weight: 400;
+        }
+        
+        .flow {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        
+        .layer {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 0;
+            position: relative;
+        }
+        
+        .layer-label {
+            width: 120px;
+            font-size: 10px;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            flex-shrink: 0;
+        }
+        
+        .nodes {
+            display: flex;
+            gap: 8px;
+            flex: 1;
+            flex-wrap: wrap;
+        }
+        
+        .node {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            padding: 8px 12px;
+            font-size: 11px;
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            position: relative;
+        }
+        
+        .node:hover {
+            border-color: #ff6b35;
+            transform: translateY(-1px);
+        }
+        
+        .node-primary {
+            border-color: #ff6b35;
+            border-width: 1px;
+        }
+        
+        .node-hub {
+            background: #1a1a1a;
+            border-color: #ff6b35;
+            font-weight: 500;
+        }
+        
+        .node-data {
+            border-color: #4a9eff;
+            background: #0d1117;
+        }
+        
+        .node-name {
+            display: block;
+            color: #e0e0e0;
+        }
+        
+        .node-sub {
+            display: block;
+            font-size: 9px;
+            color: #666;
+            margin-top: 2px;
+        }
+        
+        .connector {
+            position: absolute;
+            left: 130px;
+            width: 1px;
+            height: 100%;
+            background: linear-gradient(to bottom, #333 0%, #333 50%, transparent 50%, transparent 100%);
+            background-size: 1px 8px;
+            top: 50%;
+        }
+        
+        .flow-arrow {
+            margin: 0 0 0 140px;
+            font-size: 14px;
+            color: #ff6b35;
+            opacity: 0.6;
+        }
+        
+        .annotation {
+            margin: 20px 0 20px 140px;
+            padding: 12px;
+            background: #111;
+            border-left: 2px solid #ff6b35;
+            font-size: 10px;
+            color: #999;
+            max-width: 600px;
+        }
+        
+        .annotation strong {
+            color: #e0e0e0;
+            font-weight: 500;
+        }
+        
+        .stats {
+            margin-top: 60px;
+            padding-top: 20px;
+            border-top: 1px solid #222;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 20px;
+            font-size: 10px;
+        }
+        
+        .stat {
+            color: #666;
+        }
+        
+        .stat-value {
+            font-size: 20px;
+            color: #ff6b35;
+            font-weight: 500;
+            display: block;
+            margin-bottom: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>MOMO ARCHITECTURE</h1>
+        <div class="subtitle">Data flow view · Execution sequence from UI to persistence</div>
+        
+        <div class="flow">
+            <div class="layer">
+                <div class="layer-label">User Interface</div>
+                <div class="nodes">
+                    <div class="node">
+                        <span class="node-name">src/sidepanel</span>
+                        <span class="node-sub">React · UI controls</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="flow-arrow">↓</div>
+            
+            <div class="layer">
+                <div class="layer-label">Extension Core</div>
+                <div class="nodes">
+                    <div class="node node-hub">
+                        <span class="node-name">src/sw/orchestrator.ts</span>
+                        <span class="node-sub">AgentOrchestrator · 1,020 lines</span>
+                    </div>
+                    <div class="node node-hub">
+                        <span class="node-name">src/sw/message-router.ts</span>
+                        <span class="node-sub">MessageRouter · WebSocket client</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="annotation">
+                <strong>Primary Hub:</strong> Service Worker coordinates all extension logic. Orchestrator manages task execution loop; MessageRouter handles bridge communication over WebSocket (port 9090-9100).
+            </div>
+            
+            <div class="flow-arrow">↓</div>
+            
+            <div class="layer">
+                <div class="layer-label">Perception</div>
+                <div class="nodes">
+                    <div class="node">
+                        <span class="node-name">src/content/perception.ts</span>
+                        <span class="node-sub">Accessibility tree · DOM</span>
+                    </div>
+                    <div class="node">
+                        <span class="node-name">src/lib/selector.ts</span>
+                        <span class="node-sub">Element targeting</span>
+                    </div>
+                    <div class="node">
+                        <span class="node-name">src/lib/tools/*</span>
+                        <span class="node-sub">click · type · navigate</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="flow-arrow">↓ ws://127.0.0.1:9090</div>
+            
+            <div class="layer">
+                <div class="layer-label">Rust Bridge</div>
+                <div class="nodes">
+                    <div class="node node-primary">
+                        <span class="node-name">bridge/src/ws_server.rs</span>
+                        <span class="node-sub">WebSocket · ConnectionManager</span>
+                    </div>
+                    <div class="node node-primary">
+                        <span class="node-name">bridge/src/main.rs</span>
+                        <span class="node-sub">BridgeServer · 655 lines</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="flow-arrow">↓</div>
+            
+            <div class="layer">
+                <div class="layer-label">Policy & LLM</div>
+                <div class="nodes">
+                    <div class="node node-hub">
+                        <span class="node-name">bridge/src/policy.rs</span>
+                        <span class="node-sub">PolicyEngine · 771 lines · fail-closed</span>
+                    </div>
+                    <div class="node node-primary">
+                        <span class="node-name">bridge/src/llm.rs</span>
+                        <span class="node-sub">LLM Gateway · Claude/Ollama</span>
+                    </div>
+                    <div class="node">
+                        <span class="node-name">bridge/src/mcp_tools.rs</span>
+                        <span class="node-sub">MCP JSON-RPC</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="annotation">
+                <strong>Security Gate:</strong> PolicyEngine evaluates every action against origin allowlist, risk classification (SENSITIVE/MODERATE/LOW), and token budget. Fail-closed by default.
+            </div>
+            
+            <div class="flow-arrow">↓</div>
+            
+            <div class="layer">
+                <div class="layer-label">Persistence</div>
+                <div class="nodes">
+                    <div class="node node-data">
+                        <span class="node-name">IndexedDB</span>
+                        <span class="node-sub">Browser · Task state · WAL</span>
+                    </div>
+                    <div class="node node-data">
+                        <span class="node-name">SQLite</span>
+                        <span class="node-sub">Bridge · Audit log · Policy config</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="stats">
+            <div class="stat">
+                <span class="stat-value">1,231</span>
+                Total nodes indexed
+            </div>
+            <div class="stat">
+                <span class="stat-value">4,766</span>
+                Total edges (calls/imports)
+            </div>
+            <div class="stat">
+                <span class="stat-value">196</span>
+                Functions
+            </div>
+            <div class="stat">
+                <span class="stat-value">265</span>
+                Methods
+            </div>
+            <div class="stat">
+                <span class="stat-value">5</span>
+                Languages (TS, Rust, YAML, TOML, HTML)
+            </div>
+            <div class="stat">
+                <span class="stat-value">44</span>
+                TypeScript files
+            </div>
+        </div>
+    </div>
+</body>
+</html>

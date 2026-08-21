@@ -22,7 +22,9 @@ async function initialize(attempt = 0) {
       await orchestrator.init();
       alarmManager.start();
       isInitialized = true;
-      console.log('[SW] Autonomous Agent initialized');
+      if (import.meta.env.DEV) {
+        console.log('[SW] Autonomous Agent initialized');
+      }
       void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((err) => {
         console.warn('[SW] setPanelBehavior failed:', err);
       });

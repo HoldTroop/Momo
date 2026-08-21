@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Communication Layers - Momo</title>
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+  <div class="page-container">
+    <header class="page-header">
+      <div class="breadcrumb">
+        <a href="../../README.md">Momo</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="../ARCHITECTURE.md">Architecture</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="index.html">Visualizations</a>
+        <span class="breadcrumb-separator">/</span>
+        <span>Communication Layers</span>
+      </div>
+      <h1 class="page-title">Communication Layers</h1>
+      <p class="page-description">
+        Deep dive into the four messaging protocols: chrome.runtime for intra-extension, WebSocket for extension↔bridge, CDP for browser control, and MCP for client integration.
+      </p>
+    </header>
+
+    <div class="diagram-container">
+      <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg" class="diagram-svg">
+        <defs>
+          <marker id="arrow-purple" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#8B5CF6" />
+          </marker>
+          <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#3B82F6" />
+          </marker>
+          <marker id="arrow-amber" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#F59E0B" />
+          </marker>
+          <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#10B981" />
+          </marker>
+        </defs>
+
+        <!-- Layer 1: chrome.runtime Messages -->
+        <g data-protocol="chrome-runtime">
+          <rect x="50" y="50" width="1100" height="150" rx="16" class="component-box" style="fill: rgba(139, 92, 246, 0.05); stroke: #8B5CF6;"/>
+          <text x="70" y="80" class="component-label" style="fill: #8B5CF6;">Layer 1: chrome.runtime Messages (Intra-Extension)</text>
+
+          <!-- UI Component -->
+          <rect x="100" y="110" width="140" height="70" rx="12" class="component-box extension" data-component="runtime-ui"/>
+          <text x="170" y="135" class="component-label">Side Panel</text>
+          <text x="170" y="155" class="component-detail">chrome.runtime</text>
+          <text x="170" y="170" class="component-detail">.sendMessage()</text>
+
+          <!-- Service Worker -->
+          <rect x="530" y="110" width="140" height="70" rx="12" class="component-box extension" data-component="runtime-sw"/>
+          <text x="600" y="135" class="component-label">Service Worker</text>
+          <text x="600" y="155" class="component-detail">MessageRouter</text>
+          <text x="600" y="170" class="component-detail">.onMessage</text>
+
+          <!-- Content Scripts -->
+          <rect x="960" y="110" width="140" height="70" rx="12" class="component-box extension" data-component="runtime-cs"/>
+          <text x="1030" y="135" class="component-label">Content Script</text>
+          <text x="1030" y="155" class="component-detail">chrome.runtime</text>
+          <text x="1030" y="170" class="component-detail">.connect()</text>
+
+          <!-- Connections -->
+          <path d="M 240 135 L 530 135" class="connection-line message" marker-end="url(#arrow-amber)" style="stroke: #8B5CF6;"/>
+          <path d="M 530 155 L 240 155" class="connection-line message" marker-end="url(#arrow-amber)" style="stroke: #8B5CF6;"/>
+          <path d="M 670 135 L 960 135" class="connection-line message" marker-end="url(#arrow-amber)" style="stroke: #8B5CF6;"/>
+          <path d="M 960 155 L 670 155" class="connection-line message" marker-end="url(#arrow-amber)" style="stroke: #8B5CF6;"/>
+
+          <!-- Message types -->
+          <text x="380" y="125" class="component-detail" style="fill: #8B5CF6; font-weight: 600;">TaskMessage</text>
+          <text x="380" y="165" class="component-detail" style="fill: #8B5CF6; font-weight: 600;">StatusUpdate</text>
+          <text x="810" y="125" class="component-detail" style="fill: #8B5CF6; font-weight: 600;">ExtractRequest</text>
+          <text x="810" y="165" class="component-detail" style="fill: #8B5CF6; font-weight: 600;">PerceptionData</text>
+        </g>
+
+        <!-- Layer 2: WebSocket Protocol -->
+        <g data-protocol="websocket">
+          <rect x="50" y="230" width="1100" height="180" rx="16" class="component-box" style="fill: rgba(59, 130, 246, 0.05); stroke: #3B82F6;"/>
+          <text x="70" y="260" class="component-label" style="fill: #3B82F6;">Layer 2: WebSocket (Extension ↔ Bridge)</text>
+
+          <!-- Service Worker (Extension side) -->
+          <rect x="100" y="290" width="180" height="100" rx="12" class="component-box extension" data-component="ws-extension"/>
+          <text x="190" y="315" class="component-label">Service Worker</text>
+          <text x="190" y="335" class="component-sublabel">WSClient</text>
+          <text x="190" y="355" class="component-detail">ws://localhost:8080</text>
+          <text x="190" y="375" class="component-detail">Auth token header</text>
+
+          <!-- WebSocket Channel -->
+          <rect x="400" y="290" width="400" height="100" rx="12" class="component-box" style="fill: rgba(59, 130, 246, 0.15); stroke: #3B82F6;" data-component="ws-channel"/>
+          <text x="600" y="320" class="component-label">WebSocket Channel</text>
+          <text x="600" y="345" class="component-sublabel">JSON Message Framing</text>
+          <text x="520" y="370" class="component-detail">RPC: request_id + method + params</text>
+          <text x="680" y="370" class="component-detail">Pub/Sub: event streams</text>
+
+          <!-- Bridge (Rust side) -->
+          <rect x="920" y="290" width="180" height="100" rx="12" class="component-box bridge" data-component="ws-bridge"/>
+          <text x="1010" y="315" class="component-label">Bridge</text>
+          <text x="1010" y="335" class="component-sublabel">ConnectionManager</text>
+          <text x="1010" y="355" class="component-detail">Tokio WS handler</text>
+          <text x="1010" y="375" class="component-detail">Token validation</text>
+
+          <!-- Bidirectional flow -->
+          <path d="M 280 320 L 400 320" class="connection-line websocket animated" marker-end="url(#arrow-blue)"/>
+          <path d="M 400 350 L 280 350" class="connection-line websocket animated" marker-end="url(#arrow-blue)"/>
+          <path d="M 800 320 L 920 320" class="connection-line websocket animated" marker-end="url(#arrow-blue)"/>
+          <path d="M 920 350 L 800 350" class="connection-line websocket animated" marker-end="url(#arrow-blue)"/>
+
+          <!-- Message examples -->
+          <text x="330" y="310" class="component-detail" style="fill: #3B82F6; font-weight: 600;">Command</text>
+          <text x="330" y="360" class="component-detail" style="fill: #3B82F6; font-weight: 600;">CommandResult</text>
+          <text x="845" y="310" class="component-detail" style="fill: #3B82F6; font-weight: 600;">LLMRequest</text>
+          <text x="845" y="360" class="component-detail" style="fill: #3B82F6; font-weight: 600;">LLMResponse</text>
+        </g>
+
+        <!-- Layer 3: Chrome DevTools Protocol -->
+        <g data-protocol="cdp">
+          <rect x="50" y="440" width="550" height="150" rx="16" class="component-box" style="fill: rgba(245, 158, 11, 0.05); stroke: #F59E0B;"/>
+          <text x="70" y="470" class="component-label" style="fill: #F59E0B;">Layer 3: Chrome DevTools Protocol (Browser Control)</text>
+
+          <!-- Service Worker -->
+          <rect x="100" y="500" width="160" height="70" rx="12" class="component-box extension" data-component="cdp-sw"/>
+          <text x="180" y="525" class="component-label">Service Worker</text>
+          <text x="180" y="545" class="component-sublabel">CDPAdapter</text>
+          <text x="180" y="560" class="component-detail">chrome.debugger</text>
+
+          <!-- Browser Runtime -->
+          <rect x="390" y="500" width="160" height="70" rx="12" class="component-box" style="fill: rgba(245, 158, 11, 0.1); stroke: #F59E0B;" data-component="cdp-browser"/>
+          <text x="470" y="525" class="component-label">Browser Runtime</text>
+          <text x="470" y="545" class="component-sublabel">CDP Target</text>
+          <text x="470" y="560" class="component-detail">Tab/Page context</text>
+
+          <!-- CDP Commands -->
+          <path d="M 260 520 L 390 520" class="connection-line" style="stroke: #F59E0B;" marker-end="url(#arrow-amber)"/>
+          <path d="M 390 550 L 260 550" class="connection-line" style="stroke: #F59E0B;" marker-end="url(#arrow-amber)"/>
+
+          <text x="285" y="510" class="component-detail" style="fill: #F59E0B; font-weight: 600;">Input.dispatchMouseEvent</text>
+          <text x="285" y="565" class="component-detail" style="fill: #F59E0B; font-weight: 600;">CommandResult</text>
+        </g>
+
+        <!-- Layer 4: MCP Protocol -->
+        <g data-protocol="mcp">
+          <rect x="630" y="440" width="520" height="150" rx="16" class="component-box" style="fill: rgba(16, 185, 129, 0.05); stroke: #10B981;"/>
+          <text x="650" y="470" class="component-label" style="fill: #10B981;">Layer 4: Model Context Protocol (Client Integration)</text>
+
+          <!-- MCP Client -->
+          <rect x="680" y="500" width="160" height="70" rx="12" class="component-box" style="fill: rgba(16, 185, 129, 0.1); stroke: #10B981;" data-component="mcp-client"/>
+          <text x="760" y="525" class="component-label">MCP Client</text>
+          <text x="760" y="545" class="component-sublabel">Claude Desktop</text>
+          <text x="760" y="560" class="component-detail">stdio transport</text>
+
+          <!-- Bridge MCP Server -->
+          <rect x="940" y="500" width="160" height="70" rx="12" class="component-box bridge" data-component="mcp-server"/>
+          <text x="1020" y="525" class="component-label">MCP Server</text>
+          <text x="1020" y="545" class="component-sublabel">Bridge endpoint</text>
+          <text x="1020" y="560" class="component-detail">JSON-RPC 2.0</text>
+
+          <!-- MCP Messages -->
+          <path d="M 840 520 L 940 520" class="connection-line" style="stroke: #10B981;" marker-end="url(#arrow-green)"/>
+          <path d="M 940 550 L 840 550" class="connection-line" style="stroke: #10B981;" marker-end="url(#arrow-green)"/>
+
+          <text x="870" y="510" class="component-detail" style="fill: #10B981; font-weight: 600;">tools/call</text>
+          <text x="870" y="565" class="component-detail" style="fill: #10B981; font-weight: 600;">result</text>
+        </g>
+
+        <!-- Message Type Details -->
+        <g>
+          <rect x="50" y="620" width="1100" height="150" rx="16" class="component-box" style="fill: rgba(255, 255, 255, 0.02); stroke: rgba(255, 255, 255, 0.1);"/>
+          <text x="70" y="650" class="component-label">Message Type Examples</text>
+
+          <!-- Column 1 -->
+          <text x="100" y="680" class="component-sublabel" style="fill: #8B5CF6;">chrome.runtime</text>
+          <text x="100" y="700" class="component-detail" style="font-family: var(--font-mono);">{ type: "task_start",</text>
+          <text x="100" y="715" class="component-detail" style="font-family: var(--font-mono);">  payload: {...} }</text>
+          <text x="100" y="735" class="component-detail">Typed TypeScript interfaces</text>
+          <text x="100" y="750" class="component-detail">Port-based for streams</text>
+
+          <!-- Column 2 -->
+          <text x="350" y="680" class="component-sublabel" style="fill: #3B82F6;">WebSocket</text>
+          <text x="350" y="700" class="component-detail" style="font-family: var(--font-mono);">{ request_id: "uuid",</text>
+          <text x="350" y="715" class="component-detail" style="font-family: var(--font-mono);">  method: "execute_action",</text>
+          <text x="350" y="730" class="component-detail" style="font-family: var(--font-mono);">  params: {...} }</text>
+          <text x="350" y="750" class="component-detail">RPC + event streams</text>
+
+          <!-- Column 3 -->
+          <text x="650" y="680" class="component-sublabel" style="fill: #F59E0B;">CDP</text>
+          <text x="650" y="700" class="component-detail" style="font-family: var(--font-mono);">{ method: "Input.dispatch</text>
+          <text x="650" y="715" class="component-detail" style="font-family: var(--font-mono);">    MouseEvent",</text>
+          <text x="650" y="730" class="component-detail" style="font-family: var(--font-mono);">  params: {x, y, type} }</text>
+          <text x="650" y="750" class="component-detail">Low-level browser control</text>
+
+          <!-- Column 4 -->
+          <text x="920" y="680" class="component-sublabel" style="fill: #10B981;">MCP</text>
+          <text x="920" y="700" class="component-detail" style="font-family: var(--font-mono);">{ jsonrpc: "2.0",</text>
+          <text x="920" y="715" class="component-detail" style="font-family: var(--font-mono);">  method: "tools/call",</text>
+          <text x="920" y="730" class="component-detail" style="font-family: var(--font-mono);">  params: {name, args} }</text>
+          <text x="920" y="750" class="component-detail">Standard LLM integration</text>
+        </g>
+      </svg>
+
+      <div class="legend">
+        <div class="legend-item">
+          <div class="legend-color purple"></div>
+          <span>chrome.runtime (Intra-extension)</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-color blue"></div>
+          <span>WebSocket (Extension↔Bridge)</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-color amber"></div>
+          <span>CDP (Browser control)</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-color green"></div>
+          <span>MCP (Client integration)</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="tooltip" id="tooltip">
+      <div class="tooltip-title" id="tooltip-title"></div>
+      <div class="tooltip-content" id="tooltip-content"></div>
+    </div>
+  </div>
+
+  <script>
+    const componentData = {
+      'runtime-ui': {
+        title: 'Side Panel (chrome.runtime)',
+        content: 'Uses chrome.runtime.sendMessage() for one-shot messages and chrome.runtime.connect() for long-lived port connections to the service worker.',
+        code: 'src/sidepanel/index.tsx'
+      },
+      'runtime-sw': {
+        title: 'Service Worker MessageRouter',
+        content: 'Central message hub. Listens on chrome.runtime.onMessage and routes to appropriate handlers based on message type.',
+        code: 'src/sw/message-router.ts'
+      },
+      'runtime-cs': {
+        title: 'Content Script (chrome.runtime)',
+        content: 'Establishes port connection to service worker for bidirectional streaming of perception data and action requests.',
+        code: 'src/content/perception.ts'
+      },
+      'ws-extension': {
+        title: 'WSClient (Extension)',
+        content: 'WebSocket client in the service worker. Maintains persistent connection to bridge, handles reconnection, and auth token management.',
+        code: 'src/sw/ws-client.ts'
+      },
+      'ws-channel': {
+        title: 'WebSocket Channel',
+        content: 'Bidirectional JSON message stream. Supports RPC (request_id correlation), pub/sub events, and command channels with result tracking.',
+        code: 'JSON message framing'
+      },
+      'ws-bridge': {
+        title: 'ConnectionManager (Bridge)',
+        content: 'Tokio-based WebSocket server. Validates auth tokens, manages connection lifecycle, and routes messages to policy/LLM/MCP handlers.',
+        code: 'Rust bridge: connection-manager'
+      },
+      'cdp-sw': {
+        title: 'CDPAdapter',
+        content: 'Wraps chrome.debugger API. Attaches to tabs, dispatches CDP commands (Input.*, DOM.*, etc.), and handles CDP events.',
+        code: 'src/sw/cdp-adapter.ts'
+      },
+      'cdp-browser': {
+        title: 'CDP Target (Browser)',
+        content: 'Chrome DevTools Protocol endpoint in the browser runtime. Receives low-level commands for trusted input and DOM manipulation.',
+        code: 'chrome.debugger API'
+      },
+      'mcp-client': {
+        title: 'MCP Client',
+        content: 'External client (Claude Desktop) that discovers and calls Momo tools via the MCP protocol over stdio.',
+        code: 'Claude Desktop / MCP SDK'
+      },
+      'mcp-server': {
+        title: 'MCP Server (Bridge)',
+        content: 'Exposes Momo capabilities as MCP tools. Handles tools/list, tools/call, and resources/* over JSON-RPC 2.0 stdio transport.',
+        code: 'Rust bridge: mcp-server'
+      }
+    };
+
+    const tooltip = document.getElementById('tooltip');
+    const tooltipTitle = document.getElementById('tooltip-title');
+    const tooltipContent = document.getElementById('tooltip-content');
+
+    document.querySelectorAll('[data-component]').forEach(element => {
+      element.addEventListener('mouseenter', (e) => {
+        const componentId = e.target.getAttribute('data-component');
+        const data = componentData[componentId];
+        if (data) {
+          tooltipTitle.textContent = data.title;
+          tooltipContent.innerHTML = `${data.content}<code class="tooltip-code">${data.code}</code>`;
+          tooltip.classList.add('visible');
+        }
+      });
+
+      element.addEventListener('mousemove', (e) => {
+        tooltip.style.left = (e.pageX + 20) + 'px';
+        tooltip.style.top = (e.pageY + 20) + 'px';
+      });
+
+      element.addEventListener('mouseleave', () => {
+        tooltip.classList.remove('visible');
+      });
+    });
+  </script>
+</body>
+</html>

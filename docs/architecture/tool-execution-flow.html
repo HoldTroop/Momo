@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tool Execution Flow - Momo</title>
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+  <div class="page-container">
+    <header class="page-header">
+      <div class="breadcrumb">
+        <a href="../../README.md">Momo</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="../ARCHITECTURE.md">Architecture</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="index.html">Visualizations</a>
+        <span class="breadcrumb-separator">/</span>
+        <span>Tool Execution Flow</span>
+      </div>
+      <h1 class="page-title">Tool Execution Flow</h1>
+      <p class="page-description">
+        Security-gated execution pipeline from MCP tool call to browser action. Shows policy checks, element extraction, CDP dispatch, and audit logging in one complete cycle.
+      </p>
+    </header>
+
+    <div class="diagram-container">
+      <svg viewBox="0 0 1400 1100" xmlns="http://www.w3.org/2000/svg" class="diagram-svg">
+        <defs>
+          <marker id="arrow-purple" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#8B5CF6" />
+          </marker>
+          <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#3B82F6" />
+          </marker>
+          <marker id="arrow-amber" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#F59E0B" />
+          </marker>
+          <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#10B981" />
+          </marker>
+          <marker id="arrow-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#EF4444" />
+          </marker>
+        </defs>
+
+        <!-- Timeline -->
+        <line x1="700" y1="50" x2="700" y2="1050" stroke="rgba(255,255,255,0.1)" stroke-width="2" stroke-dasharray="5,5"/>
+
+        <!-- Step 1: MCP Client Call -->
+        <g class="step-group" data-step="1">
+          <rect x="100" y="80" width="250" height="100" rx="12" class="component-box" style="fill: rgba(245, 158, 11, 0.1); stroke: #F59E0B;" data-component="step1"/>
+          <text x="225" y="110" class="component-label">Step 1: MCP Tool Call</text>
+          <text x="225" y="135" class="component-sublabel">MCP Client → Bridge</text>
+          <text x="140" y="155" class="component-detail" style="font-family: var(--font-mono);">tools/call execute_action</text>
+          <text x="140" y="170" class="component-detail" style="font-family: var(--font-mono);">{ action: "click",</text>
+          <text x="140" y="185" class="component-detail" style="font-family: var(--font-mono);">  target: "submit button" }</text>
+
+          <circle cx="700" cy="130" r="8" fill="#F59E0B"/>
+          <text x="720" y="135" class="component-detail" style="fill: #F59E0B;">MCP stdio</text>
+        </g>
+
+        <!-- Arrow 1 to 2 -->
+        <path d="M 225 180 L 225 220" class="connection-line" style="stroke: #F59E0B;" marker-end="url(#arrow-amber)"/>
+
+        <!-- Step 2: Policy Check -->
+        <g class="step-group" data-step="2">
+          <rect x="100" y="220" width="250" height="120" rx="12" class="component-box" style="fill: rgba(245, 158, 11, 0.1); stroke: #F59E0B;" data-component="step2"/>
+          <text x="225" y="250" class="component-label">Step 2: Policy Evaluation</text>
+          <text x="225" y="270" class="component-sublabel">Bridge Policy Engine</text>
+          <text x="140" y="290" class="component-detail">✓ Check origin allowlist</text>
+          <text x="140" y="305" class="component-detail">✓ Check token budget</text>
+          <text x="140" y="320" class="component-detail">✓ Classify risk (HIGH/MED/LOW)</text>
+          <text x="140" y="335" class="component-detail">✓ Log authorization decision</text>
+
+          <circle cx="700" cy="280" r="8" fill="#F59E0B"/>
+          <text x="720" y="285" class="component-detail" style="fill: #F59E0B;">Fail-closed</text>
+
+          <!-- Decision diamond -->
+          <path d="M 400 280 L 440 250 L 480 280 L 440 310 Z" fill="rgba(245, 158, 11, 0.2)" stroke="#F59E0B" stroke-width="2"/>
+          <text x="440" y="285" class="component-detail" style="text-anchor: middle; fill: #F59E0B; font-weight: 600;">OK?</text>
+        </g>
+
+        <!-- Deny path (alternative) -->
+        <g class="step-group" style="opacity: 0.5;">
+          <path d="M 480 280 L 550 280" class="connection-line" style="stroke: #EF4444;" marker-end="url(#arrow-red)"/>
+          <rect x="550" y="250" width="120" height="60" rx="8" class="component-box" style="fill: rgba(239, 68, 68, 0.1); stroke: #EF4444;"/>
+          <text x="610" y="275" class="component-detail" style="fill: #EF4444; font-weight: 600;">DENY</text>
+          <text x="610" y="295" class="component-detail" style="fill: #EF4444;">Return error</text>
+        </g>
+
+        <!-- Arrow 2 to 3 -->
+        <path d="M 225 340 L 225 380" class="connection-line" style="stroke: #8B5CF6;" marker-end="url(#arrow-purple)"/>
+        <text x="240" y="365" class="component-detail" style="fill: #10B981;">AUTHORIZED</text>
+
+        <!-- Step 3: Issue Command -->
+        <g class="step-group" data-step="3">
+          <rect x="100" y="380" width="250" height="100" rx="12" class="component-box bridge" data-component="step3"/>
+          <text x="225" y="410" class="component-label">Step 3: Issue Command</text>
+          <text x="225" y="430" class="component-sublabel">Bridge → Extension WS</text>
+          <text x="140" y="450" class="component-detail" style="font-family: var(--font-mono);">{ request_id: "uuid",</text>
+          <text x="140" y="465" class="component-detail" style="font-family: var(--font-mono);">  authorized: true,</text>
+          <text x="140" y="480" class="component-detail" style="font-family: var(--font-mono);">  method: "execute_action" }</text>
+
+          <circle cx="700" cy="430" r="8" fill="#8B5CF6"/>
+          <text x="720" y="435" class="component-detail" style="fill: #8B5CF6;">WebSocket</text>
+
+          <path d="M 350 430 L 850 430" class="connection-line websocket animated" marker-end="url(#arrow-purple)"/>
+        </g>
+
+        <!-- Step 4: Route to Orchestrator -->
+        <g class="step-group" data-step="4">
+          <rect x="900" y="380" width="250" height="100" rx="12" class="component-box extension" data-component="step4"/>
+          <text x="1025" y="410" class="component-label">Step 4: Route Command</text>
+          <text x="1025" y="430" class="component-sublabel">Service Worker</text>
+          <text x="940" y="450" class="component-detail">Orchestrator receives</text>
+          <text x="940" y="465" class="component-detail">Validates authorized flag</text>
+          <text x="940" y="480" class="component-detail">Dispatches to action handler</text>
+
+          <circle cx="700" cy="490" r="8" fill="#8B5CF6"/>
+        </g>
+
+        <!-- Arrow 4 to 5 -->
+        <path d="M 1025 480 L 1025 530" class="connection-line" style="stroke: #8B5CF6;" marker-end="url(#arrow-purple)"/>
+
+        <!-- Step 5: Extract Elements -->
+        <g class="step-group" data-step="5">
+          <rect x="900" y="530" width="250" height="120" rx="12" class="component-box extension" data-component="step5"/>
+          <text x="1025" y="560" class="component-label">Step 5: Perception</text>
+          <text x="1025" y="580" class="component-sublabel">Content Script</text>
+          <text x="940" y="600" class="component-detail">Extract AX tree + DOM</text>
+          <text x="940" y="615" class="component-detail">Find interactive elements</text>
+          <text x="940" y="630" class="component-detail">Generate stable refs (el_XX)</text>
+          <text x="940" y="645" class="component-detail">Return ref_id_map</text>
+
+          <circle cx="700" cy="590" r="8" fill="#8B5CF6"/>
+          <text x="720" y="595" class="component-detail" style="fill: #8B5CF6;">chrome.runtime</text>
+
+          <!-- Bidirectional -->
+          <path d="M 900 570 L 400 570" class="connection-line message" marker-end="url(#arrow-amber)"/>
+          <text x="630" y="565" class="component-detail" style="fill: #8B5CF6;">ExtractRequest</text>
+          <path d="M 400 600 L 900 600" class="connection-line message" marker-end="url(#arrow-amber)"/>
+          <text x="630" y="615" class="component-detail" style="fill: #8B5CF6;">PerceptionData</text>
+        </g>
+
+        <!-- Service Worker processes -->
+        <rect x="100" y="530" width="250" height="120" rx="12" class="component-box extension" data-component="step5-sw"/>
+        <text x="225" y="560" class="component-label">Service Worker</text>
+        <text x="225" y="580" class="component-sublabel">Processes Perception</text>
+        <text x="140" y="600" class="component-detail">Match target query</text>
+        <text x="140" y="615" class="component-detail">"submit button" → el_12</text>
+        <text x="140" y="630" class="component-detail">Resolve element reference</text>
+        <text x="140" y="645" class="component-detail">Prepare CDP command</text>
+
+        <!-- Arrow to 6 -->
+        <path d="M 225 650 L 225 690" class="connection-line" style="stroke: #3B82F6;" marker-end="url(#arrow-blue)"/>
+
+        <!-- Step 6: CDP Dispatch -->
+        <g class="step-group" data-step="6">
+          <rect x="100" y="690" width="250" height="100" rx="12" class="component-box extension" data-component="step6"/>
+          <text x="225" y="720" class="component-label">Step 6: CDP Dispatch</text>
+          <text x="225" y="740" class="component-sublabel">Service Worker → Browser</text>
+          <text x="140" y="760" class="component-detail" style="font-family: var(--font-mono);">Input.dispatchMouseEvent</text>
+          <text x="140" y="775" class="component-detail" style="font-family: var(--font-mono);">{ x: 450, y: 320,</text>
+          <text x="140" y="790" class="component-detail" style="font-family: var(--font-mono);">  type: "mousePressed" }</text>
+
+          <circle cx="700" cy="740" r="8" fill="#3B82F6"/>
+          <text x="720" y="745" class="component-detail" style="fill: #3B82F6;">chrome.debugger</text>
+        </g>
+
+        <!-- Arrow to browser -->
+        <path d="M 350 740 L 850 740" class="connection-line cdp" marker-end="url(#arrow-blue)"/>
+
+        <!-- Step 7: Browser Action -->
+        <g class="step-group" data-step="7">
+          <rect x="900" y="690" width="250" height="100" rx="12" class="component-box" style="fill: rgba(16, 185, 129, 0.1); stroke: #10B981;" data-component="step7"/>
+          <text x="1025" y="720" class="component-label">Step 7: Browser Action</text>
+          <text x="1025" y="740" class="component-sublabel">Web Page</text>
+          <text x="940" y="760" class="component-detail">CDP trusted input</text>
+          <text x="940" y="775" class="component-detail">Click el_12 (submit button)</text>
+          <text x="940" y="790" class="component-detail">DOM event dispatched</text>
+
+          <circle cx="700" cy="800" r="8" fill="#10B981"/>
+          <text x="720" y="805" class="component-detail" style="fill: #10B981;">Trusted execution</text>
+        </g>
+
+        <!-- Arrow back to SW -->
+        <path d="M 900 765 L 350 765" class="connection-line" style="stroke: #10B981; stroke-dasharray: 3, 3;" marker-end="url(#arrow-green)"/>
+        <text x="600" y="780" class="component-detail" style="fill: #10B981;">Action result</text>
+
+        <!-- Arrow 7 to 8 -->
+        <path d="M 225 790 L 225 840" class="connection-line" style="stroke: #8B5CF6;" marker-end="url(#arrow-purple)"/>
+
+        <!-- Step 8: Return Result -->
+        <g class="step-group" data-step="8">
+          <rect x="100" y="840" width="250" height="100" rx="12" class="component-box extension" data-component="step8"/>
+          <text x="225" y="870" class="component-label">Step 8: Command Result</text>
+          <text x="225" y="890" class="component-sublabel">Extension → Bridge WS</text>
+          <text x="140" y="910" class="component-detail" style="font-family: var(--font-mono);">{ request_id: "uuid",</text>
+          <text x="140" y="925" class="component-detail" style="font-family: var(--font-mono);">  success: true,</text>
+          <text x="140" y="940" class="component-detail" style="font-family: var(--font-mono);">  outcome: "clicked el_12" }</text>
+
+          <circle cx="700" cy="890" r="8" fill="#8B5CF6"/>
+
+          <path d="M 350 890 L 850 890" class="connection-line websocket animated" marker-end="url(#arrow-purple)"/>
+        </g>
+
+        <!-- Step 9: Audit Update -->
+        <g class="step-group" data-step="9">
+          <rect x="900" y="840" width="250" height="100" rx="12" class="component-box bridge" data-component="step9"/>
+          <text x="1025" y="870" class="component-label">Step 9: Audit Update</text>
+          <text x="1025" y="890" class="component-sublabel">Policy Engine</text>
+          <text x="940" y="910" class="component-detail">Log execution outcome</text>
+          <text x="940" y="925" class="component-detail">Update token budget</text>
+          <text x="940" y="940" class="component-detail">Immutable audit trail</text>
+
+          <circle cx="700" cy="950" r="8" fill="#F59E0B"/>
+          <text x="720" y="955" class="component-detail" style="fill: #F59E0B;">SQLite</text>
+        </g>
+
+        <!-- Arrow 9 to 10 -->
+        <path d="M 1025 940 L 1025 990" class="connection-line" style="stroke: #F59E0B;" marker-end="url(#arrow-amber)"/>
+
+        <!-- Step 10: Return to Client -->
+        <g class="step-group" data-step="10">
+          <rect x="900" y="990" width="250" height="80" rx="12" class="component-box" style="fill: rgba(245, 158, 11, 0.1); stroke: #F59E0B;" data-component="step10"/>
+          <text x="1025" y="1020" class="component-label">Step 10: MCP Response</text>
+          <text x="1025" y="1040" class="component-sublabel">Bridge → MCP Client</text>
+          <text x="940" y="1060" class="component-detail" style="font-family: var(--font-mono);">{ result: { success: true } }</text>
+
+          <circle cx="700" cy="1030" r="8" fill="#F59E0B"/>
+
+          <path d="M 900 1030 L 100 1030 L 100 1070" class="connection-line" style="stroke: #F59E0B;" marker-end="url(#arrow-amber)"/>
+        </g>
+
+        <!-- Final client box -->
+        <rect x="25" y="990" width="150" height="80" rx="12" class="component-box" style="fill: rgba(245, 158, 11, 0.1); stroke: #F59E0B;"/>
+        <text x="100" y="1020" class="component-label">MCP Client</text>
+        <text x="100" y="1040" class="component-sublabel">Tool complete</text>
+
+        <!-- Key insights box -->
+        <rect x="400" y="980" width="400" height="90" rx="12" class="component-box" style="fill: rgba(16, 185, 129, 0.05); stroke: #10B981;"/>
+        <text x="600" y="1005" class="component-label" style="fill: #10B981;">Security Guarantees</text>
+        <text x="420" y="1025" class="component-detail">✓ Extension never self-authorizes (fail-closed)</text>
+        <text x="420" y="1040" class="component-detail">✓ Policy decision logged before execution</text>
+        <text x="420" y="1055" class="component-detail">✓ Execution outcome logged for audit trail</text>
+        <text x="420" y="1070" class="component-detail">✓ Immutable audit log in trusted bridge</text>
+      </svg>
+
+      <div class="legend">
+        <div class="legend-item">
+          <div class="legend-color amber"></div>
+          <span>MCP/Policy (External boundary)</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-color purple"></div>
+          <span>WebSocket/Extension (Internal)</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-color blue"></div>
+          <span>CDP (Browser control)</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-color green"></div>
+          <span>Trusted execution</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="tooltip" id="tooltip">
+      <div class="tooltip-title" id="tooltip-title"></div>
+      <div class="tooltip-content" id="tooltip-content"></div>
+    </div>
+  </div>
+
+  <script>
+    const componentData = {
+      'step1': {
+        title: 'MCP Tool Call',
+        content: 'External client calls execute_action via MCP stdio. Bridge receives the tool call and begins the security-gated execution pipeline.',
+        code: 'MCP: tools/call execute_action'
+      },
+      'step2': {
+        title: 'Policy Evaluation',
+        content: 'Bridge policy engine checks: origin allowlist, token budget, risk classification. Decision is logged to audit trail. Fail-closed: deny by default unless explicitly authorized.',
+        code: 'Rust: policy_engine.authorize(origin, action)'
+      },
+      'step3': {
+        title: 'Issue Command',
+        content: 'If authorized, bridge sends Command with authorized=true flag over WebSocket. Command includes request_id for result correlation.',
+        code: 'WS: { request_id, authorized: true, method }'
+      },
+      'step4': {
+        title: 'Route Command',
+        content: 'Service Worker MessageRouter receives command, validates authorized flag, and dispatches to AgentOrchestrator action handler.',
+        code: 'src/sw/orchestrator.ts: executeCommand()'
+      },
+      'step5': {
+        title: 'Perception Layer',
+        content: 'Content script extracts page structure via AX tree and DOM. Generates stable element references (el_XX) that survive DOM mutations.',
+        code: 'src/content/perception.ts, ax-extractor.ts'
+      },
+      'step5-sw': {
+        title: 'Match Target',
+        content: 'Orchestrator matches target query ("submit button") to element reference (el_12) using perception data. Prepares CDP command with coordinates.',
+        code: 'Match query → resolve el_XX → CDP params'
+      },
+      'step6': {
+        title: 'CDP Dispatch',
+        content: 'Service Worker uses chrome.debugger API to send Input.dispatchMouseEvent. CDP provides trusted input that bypasses page scripts.',
+        code: 'chrome.debugger.sendCommand(Input.dispatchMouseEvent)'
+      },
+      'step7': {
+        title: 'Browser Action',
+        content: 'Browser runtime executes trusted click on the target element. DOM event fires, triggering page behavior (form submit, navigation, etc.).',
+        code: 'CDP → Trusted input → DOM event'
+      },
+      'step8': {
+        title: 'Command Result',
+        content: 'Extension reports execution outcome back to bridge over WebSocket. Includes success status and outcome description for audit.',
+        code: 'WS: { request_id, success, outcome }'
+      },
+      'step9': {
+        title: 'Audit Update',
+        content: 'Bridge updates audit log with execution outcome, updates token budget, and maintains immutable audit trail in SQLite.',
+        code: 'SQLite: UPDATE audit_log SET outcome=...'
+      },
+      'step10': {
+        title: 'MCP Response',
+        content: 'Bridge returns tool result to MCP client. Client receives success/failure and can proceed with next action.',
+        code: 'MCP: tools/call response'
+      }
+    };
+
+    const tooltip = document.getElementById('tooltip');
+    const tooltipTitle = document.getElementById('tooltip-title');
+    const tooltipContent = document.getElementById('tooltip-content');
+
+    document.querySelectorAll('[data-component]').forEach(element => {
+      element.addEventListener('mouseenter', (e) => {
+        const componentId = e.target.getAttribute('data-component');
+        const data = componentData[componentId];
+        if (data) {
+          tooltipTitle.textContent = data.title;
+          tooltipContent.innerHTML = `${data.content}<code class="tooltip-code">${data.code}</code>`;
+          tooltip.classList.add('visible');
+        }
+      });
+
+      element.addEventListener('mousemove', (e) => {
+        tooltip.style.left = (e.pageX + 20) + 'px';
+        tooltip.style.top = (e.pageY + 20) + 'px';
+      });
+
+      element.addEventListener('mouseleave', () => {
+        tooltip.classList.remove('visible');
+      });
+    });
+  </script>
+</body>
+</html>

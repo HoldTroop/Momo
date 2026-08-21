@@ -1,0 +1,44 @@
+sequenceDiagram
+    autonumber
+    participant MCP as MCP Client
+    participant Bridge as Rust Bridge
+    participant WS as WebSocket
+    participant SW as Service Worker
+    participant CS as Content Script
+    participant Page as Web Page
+
+    Note over MCP,Bridge: Mode B: MCP over stdio
+
+    MCP->>Bridge: tools/call<br/>(execute_action)
+    activate Bridge
+    
+    Bridge->>Bridge: Policy check<br/>(origin allowlist)
+    
+    Bridge->>WS: Command<br/>(request_id, params)
+    activate WS
+    
+    WS->>SW: execute_action
+    activate SW
+    
+    SW->>CS: Extract elements<br/>(perception layer)
+    activate CS
+    CS->>Page: Read AX tree + DOM
+    Page-->>CS: Interactive elements
+    CS-->>SW: ref_id_map
+    deactivate CS
+    
+    SW->>Page: CDP Input.dispatchMouseEvent<br/>(trusted click)
+    Page-->>SW: Action result
+    
+    SW->>WS: CommandResult<br/>(success/error)
+    deactivate SW
+    
+    WS-->>Bridge: Result payload
+    deactivate WS
+    
+    Bridge->>Bridge: Log audit entry
+    
+    Bridge-->>MCP: tools/call response
+    deactivate Bridge
+
+    Note over Bridge: Audit log records:<br/>origin, action, outcome, risk_class

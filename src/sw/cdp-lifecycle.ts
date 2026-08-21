@@ -33,7 +33,9 @@ export async function attachCdpToActiveTab(bindings: CdpBindings): Promise<strin
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const activeTab = tabs[0];
     if (!activeTab?.url) {
-      console.log('[Orchestrator] No active tab');
+      if (import.meta.env.DEV) {
+        console.log('[Orchestrator] No active tab');
+      }
       return null;
     }
     bindings.drivingTabId = activeTab.id ?? null;
@@ -44,7 +46,9 @@ export async function attachCdpToActiveTab(bindings: CdpBindings): Promise<strin
     const target = targets.find(t => t.type === 'page' && activeTab.id !== undefined && t.tabId === activeTab.id)
       ?? targets.find(t => t.type === 'page' && t.url === activeTab.url);
     if (!target) {
-      console.log('[Orchestrator] No CDP target for active tab:', activeTab.url);
+      if (import.meta.env.DEV) {
+        console.log('[Orchestrator] No CDP target for active tab:', activeTab.url);
+      }
       return null;
     }
 

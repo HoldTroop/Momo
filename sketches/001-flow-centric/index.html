@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Momo Architecture - Flow Centric</title>
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({ 
+            startOnLoad: true,
+            theme: 'dark',
+            flowchart: {
+                curve: 'basis',
+                padding: 20
+            },
+            themeVariables: {
+                darkMode: true,
+                background: '#0a0a0a',
+                primaryColor: '#1a1a1a',
+                primaryTextColor: '#e0e0e0',
+                primaryBorderColor: '#333',
+                lineColor: '#ff6b35',
+                secondaryColor: '#1a1a1a',
+                tertiaryColor: '#1a1a1a',
+                fontSize: '13px',
+                fontFamily: 'ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace'
+            }
+        });
+    </script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+            -webkit-font-smoothing: antialiased;
+            color: #e0e0e0;
+            background: #0a0a0a;
+            line-height: 1.6;
+            padding: 40px 20px;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        h1 {
+            font-size: 18px;
+            font-weight: 500;
+            color: #ff6b35;
+            margin-bottom: 8px;
+            letter-spacing: -0.02em;
+        }
+        .subtitle {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 40px;
+            font-weight: 400;
+        }
+        .mermaid {
+            background: #0a0a0a;
+            border-radius: 0;
+            padding: 0;
+        }
+        .legend {
+            margin-top: 40px;
+            padding: 20px;
+            background: #111;
+            border-left: 2px solid #ff6b35;
+            font-size: 11px;
+            color: #999;
+        }
+        .legend-item {
+            margin-bottom: 8px;
+        }
+        .legend-item strong {
+            color: #e0e0e0;
+            font-weight: 500;
+        }
+        .flow-line {
+            color: #ff6b35;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>MOMO ARCHITECTURE</h1>
+        <div class="subtitle">Flow-centric view · Primary execution paths only</div>
+        
+        <div class="mermaid">
+%%{init: {'theme':'dark', 'flowchart': {'curve':'basis'}}}%%
+graph LR
+    subgraph Browser["BROWSER CONTEXT"]
+        SP["src/sidepanel<br/><span style='font-size:10px;color:#666'>React UI</span>"]
+        SW["src/sw<br/><span style='font-size:10px;color:#666'>orchestrator.ts<br/>message-router.ts</span>"]
+        CS["src/content<br/><span style='font-size:10px;color:#666'>perception.ts</span>"]
+        LIB["src/lib<br/><span style='font-size:10px;color:#666'>tools/ selector.ts</span>"]
+    end
+    
+    subgraph Bridge["RUST BRIDGE"]
+        WS["bridge/src<br/><span style='font-size:10px;color:#666'>ws_server.rs<br/>main.rs</span>"]
+        POL["bridge/src<br/><span style='font-size:10px;color:#666'>policy.rs</span>"]
+        LLM["bridge/src<br/><span style='font-size:10px;color:#666'>llm.rs</span>"]
+    end
+    
+    subgraph Data["PERSISTENCE"]
+        IDB[("IndexedDB")]
+        SQL[("SQLite")]
+    end
+    
+    SP -.->|"user action"| SW
+    SW ==>|"ws://:9090"| WS
+    SW -->|"tool call"| CS
+    SW -->|"tool registry"| LIB
+    CS -.->|"perception"| SW
+    
+    WS ==> POL
+    POL ==>|"allow/deny"| WS
+    POL --> LLM
+    LLM -.->|"API"| EXT["Claude/Ollama"]
+    
+    POL --> SQL
+    SW --> IDB
+    
+    classDef browser fill:#1a1a1a,stroke:#333,stroke-width:1px,color:#e0e0e0
+    classDef bridge fill:#1a1a1a,stroke:#ff6b35,stroke-width:1px,color:#e0e0e0
+    classDef data fill:#1a1a1a,stroke:#4a9eff,stroke-width:1px,color:#e0e0e0
+    classDef external fill:none,stroke:#666,stroke-width:1px,stroke-dasharray:3,color:#666
+    
+    class SP,SW,CS,LIB browser
+    class WS,POL,LLM bridge
+    class IDB,SQL data
+    class EXT external
+        </div>
+
+        <div class="legend">
+            <div class="legend-item"><strong class="flow-line">━━━</strong> Primary execution flow (WebSocket, Policy chain)</div>
+            <div class="legend-item"><strong style="color:#4a9eff">━━━</strong> Data persistence</div>
+            <div class="legend-item"><strong style="color:#666">┄┄┄</strong> Secondary/utility connections</div>
+            <div class="legend-item"><strong>src/sw</strong> = Service Worker (AgentOrchestrator, MessageRouter)</div>
+            <div class="legend-item"><strong>bridge/src</strong> = Rust bridge (ws_server, policy, llm, mcp_tools)</div>
+        </div>
+    </div>
+</body>
+</html>

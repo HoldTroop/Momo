@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Perception System - Momo</title>
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+  <div class="page-container">
+    <header class="page-header">
+      <div class="breadcrumb">
+        <a href="../../README.md">Momo</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="../ARCHITECTURE.md">Architecture</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="index.html">Visualizations</a>
+        <span class="breadcrumb-separator">/</span>
+        <span>Perception System</span>
+      </div>
+      <h1 class="page-title">Perception System</h1>
+      <p class="page-description">
+        How Momo "sees" web pages: AX tree extraction, DOM observation, element reference stabilization, and the redaction engine that protects sensitive data.
+      </p>
+    </header>
+
+    <div class="diagram-container">
+      <svg viewBox="0 0 1400 1000" xmlns="http://www.w3.org/2000/svg" class="diagram-svg">
+        <defs>
+          <marker id="arrow-purple" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#8B5CF6" />
+          </marker>
+          <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#3B82F6" />
+          </marker>
+          <marker id="arrow-amber" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#F59E0B" />
+          </marker>
+          <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#10B981" />
+          </marker>
+          <marker id="arrow-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#EF4444" />
+          </marker>
+        </defs>
+
+        <!-- Web Page (Source) -->
+        <g>
+          <rect x="50" y="50" width="300" height="400" rx="16" class="component-box" style="fill: rgba(16, 185, 129, 0.05); stroke: #10B981;"/>
+          <text x="200" y="85" class="component-label" style="fill: #10B981;">Web Page (DOM)</text>
+
+          <!-- Sample DOM structure -->
+          <rect x="80" y="110" width="240" height="320" rx="8" class="component-box" style="fill: rgba(16, 185, 129, 0.1); stroke: #10B981;"/>
+          <text x="95" y="135" class="component-detail" style="font-family: var(--font-mono); fill: #10B981;">&lt;html&gt;</text>
+          <text x="105" y="155" class="component-detail" style="font-family: var(--font-mono);">&lt;body&gt;</text>
+          <text x="120" y="175" class="component-detail" style="font-family: var(--font-mono);">&lt;header&gt;</text>
+          <text x="135" y="195" class="component-detail" style="font-family: var(--font-mono);">&lt;nav&gt;...&lt;/nav&gt;</text>
+          <text x="120" y="215" class="component-detail" style="font-family: var(--font-mono);">&lt;/header&gt;</text>
+          <text x="120" y="235" class="component-detail" style="font-family: var(--font-mono);">&lt;main&gt;</text>
+          <text x="135" y="255" class="component-detail" style="font-family: var(--font-mono);">&lt;form&gt;</text>
+          <text x="150" y="275" class="component-detail" style="font-family: var(--font-mono); fill: #F59E0B;">&lt;input type="text"</text>
+          <text x="165" y="290" class="component-detail" style="font-family: var(--font-mono); fill: #F59E0B;">  value="user@email.com"&gt;</text>
+          <text x="150" y="310" class="component-detail" style="font-family: var(--font-mono); fill: #8B5CF6;">&lt;button&gt;Submit&lt;/button&gt;</text>
+          <text x="135" y="330" class="component-detail" style="font-family: var(--font-mono);">&lt;/form&gt;</text>
+          <text x="120" y="350" class="component-detail" style="font-family: var(--font-mono);">&lt;/main&gt;</text>
+          <text x="105" y="370" class="component-detail" style="font-family: var(--font-mono);">&lt;/body&gt;</text>
+          <text x="95" y="390" class="component-detail" style="font-family: var(--font-mono); fill: #10B981;">&lt;/html&gt;</text>
+
+          <text x="95" y="415" class="component-detail" style="fill: #6B7280;">Contains: interactive elements,</text>
+          <text x="95" y="430" class="component-detail" style="fill: #6B7280;">sensitive data, dynamic content</text>
+        </g>
+
+        <!-- Extraction Pipeline -->
+        <g>
+          <!-- AX Tree Extractor -->
+          <rect x="450" y="50" width="280" height="180" rx="12" class="component-box extension" data-component="ax-extractor"/>
+          <text x="590" y="85" class="component-label">AX Tree Extractor</text>
+          <text x="590" y="105" class="component-sublabel">Content Script Layer</text>
+
+          <text x="470" y="135" class="component-detail" style="font-weight: 600;">Input: DOM</text>
+          <text x="470" y="155" class="component-detail">• chrome.automation API</text>
+          <text x="470" y="170" class="component-detail">• Accessibility tree structure</text>
+          <text x="470" y="185" class="component-detail">• Role, name, value, state</text>
+
+          <text x="470" y="210" class="component-detail" style="font-weight: 600;">Output: AX Nodes</text>
+          <text x="470" y="225" class="component-detail" style="font-family: var(--font-mono);">{ role: "button", name: "Submit",</text>
+          <text x="470" y="240" class="component-detail" style="font-family: var(--font-mono);">  bounds: {x, y, w, h} }</text>
+
+          <!-- Arrow from DOM -->
+          <path d="M 350 200 L 450 150" class="connection-line" style="stroke: #10B981;" marker-end="url(#arrow-green)"/>
+          <text x="370" y="170" class="component-detail" style="fill: #10B981;">Extract</text>
+
+          <!-- DOM Observer -->
+          <rect x="450" y="260" width="280" height="140" rx="12" class="component-box extension" data-component="dom-observer"/>
+          <text x="590" y="290" class="component-label">DOM Observer</text>
+          <text x="590" y="310" class="component-sublabel">Mutation Watcher</text>
+
+          <text x="470" y="335" class="component-detail">• MutationObserver</text>
+          <text x="470" y="350" class="component-detail">• Detects DOM changes</text>
+          <text x="470" y="365" class="component-detail">• Invalidates stale refs</text>
+          <text x="470" y="380" class="component-detail">• Triggers re-extraction</text>
+
+          <!-- Arrow from DOM -->
+          <path d="M 350 300 L 450 330" class="connection-line data-flow" marker-end="url(#arrow-green)"/>
+          <text x="370" y="310" class="component-detail" style="fill: #10B981;">Watch</text>
+        </g>
+
+        <!-- Element Reference Stabilization -->
+        <g>
+          <rect x="800" y="50" width="300" height="200" rx="12" class="component-box" style="fill: rgba(139, 92, 246, 0.1); stroke: #8B5CF6;" data-component="ref-stabilizer"/>
+          <text x="950" y="85" class="component-label">Reference Stabilizer</text>
+          <text x="950" y="105" class="component-sublabel">Stable el_XX Generation</text>
+
+          <text x="820" y="135" class="component-detail" style="font-weight: 600;">Problem: DOM mutations invalidate refs</text>
+          <text x="820" y="155" class="component-detail">Solution: Generate stable identifiers</text>
+
+          <rect x="820" y="175" width="260" height="60" rx="8" class="component-box" style="fill: rgba(139, 92, 246, 0.15); stroke: #8B5CF6;"/>
+          <text x="950" y="200" class="component-detail" style="font-family: var(--font-mono); fill: #8B5CF6;">el_01: &lt;button&gt;Submit&lt;/button&gt;</text>
+          <text x="950" y="220" class="component-detail" style="font-family: var(--font-mono); fill: #8B5CF6;">el_02: &lt;input type="text"&gt;</text>
+
+          <!-- Arrow from AX -->
+          <path d="M 730 140 L 800 140" class="connection-line" style="stroke: #8B5CF6;" marker-end="url(#arrow-purple)"/>
+          <text x="745" y="130" class="component-detail" style="fill: #8B5CF6;">Stabilize</text>
+        </g>
+
+        <!-- Redaction Engine -->
+        <g>
+          <rect x="800" y="280" width="300" height="200" rx="12" class="component-box" style="fill: rgba(239, 68, 68, 0.1); stroke: #EF4444;" data-component="redaction"/>
+          <text x="950" y="315" class="component-label" style="fill: #EF4444;">Redaction Engine</text>
+          <text x="950" y="335" class="component-sublabel">Sensitive Data Protection</text>
+
+          <text x="820" y="365" class="component-detail" style="font-weight: 600;">Detects & Redacts:</text>
+          <text x="820" y="385" class="component-detail">• Email addresses → [EMAIL]</text>
+          <text x="820" y="400" class="component-detail">• Credit cards → [CREDIT_CARD]</text>
+          <text x="820" y="415" class="component-detail">• Phone numbers → [PHONE]</text>
+          <text x="820" y="430" class="component-detail">• SSN, API keys, tokens</text>
+
+          <text x="820" y="455" class="component-detail" style="font-weight: 600;">Pattern-based regex matching</text>
+          <text x="820" y="470" class="component-detail" style="font-family: var(--font-mono); fill: #EF4444;">value: "[EMAIL]" (redacted)</text>
+
+          <!-- Arrow from stabilizer -->
+          <path d="M 950 250 L 950 280" class="connection-line" style="stroke: #EF4444;" marker-end="url(#arrow-red)"/>
+          <text x="960" y="270" class="component-detail" style="fill: #EF4444;">Filter</text>
+        </g>
+
+        <!-- Perception Data Output -->
+        <g>
+          <rect x="450" y="530" width="650" height="280" rx="16" class="component-box" style="fill: rgba(59, 130, 246, 0.05); stroke: #3B82F6;"/>
+          <text x="775" y="565" class="component-label" style="fill: #3B82F6;">Perception Data (Output)</text>
+
+          <!-- Sample output -->
+          <rect x="480" y="590" width="590" height="200" rx="8" class="component-box" style="fill: rgba(59, 130, 246, 0.1); stroke: #3B82F6;"/>
+          <text x="495" y="615" class="component-detail" style="font-family: var(--font-mono);">{</text>
+          <text x="510" y="635" class="component-detail" style="font-family: var(--font-mono);">  "elements": [</text>
+          <text x="525" y="655" class="component-detail" style="font-family: var(--font-mono);">    { "ref": "el_01",</text>
+          <text x="540" y="670" class="component-detail" style="font-family: var(--font-mono);">      "role": "button",</text>
+          <text x="540" y="685" class="component-detail" style="font-family: var(--font-mono);">      "name": "Submit",</text>
+          <text x="540" y="700" class="component-detail" style="font-family: var(--font-mono);">      "bounds": { "x": 450, "y": 320, "w": 100, "h": 40 },</text>
+          <text x="540" y="715" class="component-detail" style="font-family: var(--font-mono);">      "interactive": true },</text>
+          <text x="525" y="735" class="component-detail" style="font-family: var(--font-mono);">    { "ref": "el_02",</text>
+          <text x="540" y="750" class="component-detail" style="font-family: var(--font-mono);">      "role": "textbox",</text>
+          <text x="540" y="765" class="component-detail" style="font-family: var(--font-mono); fill: #EF4444;">      "value": "[EMAIL]", // redacted</text>
+          <text x="540" y="780" class="component-detail" style="font-family: var(--font-mono);">      "interactive": true }</text>
+          <text x="510" y="795" class="component-detail" style="font-family: var(--font-mono);">  ]</text>
+          <text x="495" y="810" class="component-detail" style="font-family: var(--font-mono);">}</text>
+
+          <!-- Arrows to output -->
+          <path d="M 950 480 L 775 530" class="connection-line" style="stroke: #3B82F6;" marker-end="url(#arrow-blue)"/>
+          <path d="M 590 400 L 650 530" class="connection-line" style="stroke: #3B82F6;" marker-end="url(#arrow-blue)"/>
+
+          <text x="820" y="830" class="component-detail" style="fill: #10B981;">✓ Stable references survive DOM mutations</text>
+          <text x="820" y="850" class="component-detail" style="fill: #10B981;">✓ Sensitive data redacted before leaving content script</text>
+          <text x="820" y="870" class="component-detail" style="fill: #10B981;">✓ Rich semantic info for LLM reasoning</text>
+        </g>
+
+        <!-- Service Worker consumption -->
+        <g>
+          <rect x="50" y="530" width="350" height="280" rx="16" class="component-box extension" data-component="consumer"/>
+          <text x="225" y="565" class="component-label">Service Worker Usage</text>
+
+          <text x="70" y="600" class="component-detail" style="font-weight: 600;">AgentOrchestrator consumes perception:</text>
+
+          <text x="70" y="630" class="component-detail" style="fill: #8B5CF6;">1. Element Targeting</text>
+          <text x="85" y="650" class="component-detail">Match query → el_XX ref</text>
+          <text x="85" y="665" class="component-detail">"submit button" → el_01</text>
+
+          <text x="70" y="695" class="component-detail" style="fill: #8B5CF6;">2. Action Execution</text>
+          <text x="85" y="715" class="component-detail">Resolve el_01 → DOM coords</text>
+          <text x="85" y="730" class="component-detail">CDP click at (x: 450, y: 320)</text>
+
+          <text x="70" y="760" class="component-detail" style="fill: #8B5CF6;">3. LLM Context</text>
+          <text x="85" y="780" class="component-detail">Send perception to LLM for</text>
+          <text x="85" y="795" class="component-detail">planning and reasoning</text>
+
+          <!-- Arrow from perception data -->
+          <path d="M 450 690 L 400 690" class="connection-line message" marker-end="url(#arrow-amber)"/>
+          <text x="410" y="680" class="component-detail" style="fill: #F59E0B;">Consume</text>
+        </g>
+
+        <!-- Human Input Detection -->
+        <g>
+          <rect x="450" y="850" width="280" height="120" rx="12" class="component-box" style="fill: rgba(245, 158, 11, 0.1); stroke: #F59E0B;" data-component="human-input"/>
+          <text x="590" y="880" class="component-label">Human Input Detection</text>
+          <text x="590" y="900" class="component-sublabel">Content Script</text>
+
+          <text x="470" y="925" class="component-detail">Detects user interactions:</text>
+          <text x="470" y="940" class="component-detail">• Mouse clicks, keyboard input</text>
+          <text x="470" y="955" class="component-detail">• Pauses autonomous operation</text>
+          <text x="470" y="970" class="component-detail">• Prevents action conflicts</text>
+
+          <!-- Arrow from DOM -->
+          <path d="M 200 450 L 200 900 L 450 900" class="connection-line" style="stroke: #F59E0B; stroke-dasharray: 3, 3;" marker-end="url(#arrow-amber)"/>
+          <text x="220" y="670" class="component-detail" style="fill: #F59E0B;">User events</text>
+
+          <!-- Arrow to SW -->
+          <path d="M 450 920 L 225 920 L 225 810" class="connection-line" style="stroke: #F59E0B;" marker-end="url(#arrow-amber)"/>
+          <text x="320" y="910" class="component-detail" style="fill: #F59E0B;">Signal pause</text>
+        </g>
+      </svg>
+
+      <div class="legend">
+        <div class="legend-item">
+          <div class="legend-color green"></div>
+          <span>Web Page (Source)</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-color purple"></div>
+          <span>Reference Stabilization</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-color red"></div>
+          <span>Redaction (Security)</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-color blue"></div>
+          <span>Perception Output</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="tooltip" id="tooltip">
+      <div class="tooltip-title" id="tooltip-title"></div>
+      <div class="tooltip-content" id="tooltip-content"></div>
+    </div>
+  </div>
+
+  <script>
+    const componentData = {
+      'ax-extractor': {
+        title: 'AX Tree Extractor',
+        content: 'Uses chrome.automation API to extract the accessibility tree. Provides semantic structure: roles (button, textbox), names, states, and bounding boxes for each interactive element.',
+        code: 'src/content/ax-extractor.ts'
+      },
+      'dom-observer': {
+        title: 'DOM Observer',
+        content: 'MutationObserver watches for DOM changes (additions, removals, attribute changes). When mutations occur, triggers re-extraction to keep perception data fresh.',
+        code: 'src/content/dom-observer.ts'
+      },
+      'ref-stabilizer': {
+        title: 'Reference Stabilizer',
+        content: 'Generates stable element identifiers (el_01, el_02, ...) that survive DOM mutations. Maps each el_XX to a robust selector path so actions can target the correct element even after page changes.',
+        code: 'Stable reference generation'
+      },
+      'redaction': {
+        title: 'Redaction Engine',
+        content: 'Pattern-based detection and redaction of sensitive data: emails, credit cards, phone numbers, SSNs, API keys. Replaces values with [EMAIL], [CREDIT_CARD], etc. before data leaves the content script.',
+        code: 'src/lib/redaction.ts'
+      },
+      'consumer': {
+        title: 'Service Worker (Consumer)',
+        content: 'AgentOrchestrator uses perception data for: (1) Targeting—match queries to el_XX refs, (2) Execution—resolve refs to DOM coords for CDP, (3) Context—send to LLM for reasoning.',
+        code: 'src/sw/orchestrator.ts'
+      },
+      'human-input': {
+        title: 'Human Input Detection',
+        content: 'Listens for user mouse/keyboard events in the page. When human input is detected, signals the orchestrator to pause autonomous actions to prevent conflicts.',
+        code: 'src/content/human-input.ts'
+      }
+    };
+
+    const tooltip = document.getElementById('tooltip');
+    const tooltipTitle = document.getElementById('tooltip-title');
+    const tooltipContent = document.getElementById('tooltip-content');
+
+    document.querySelectorAll('[data-component]').forEach(element => {
+      element.addEventListener('mouseenter', (e) => {
+        const componentId = e.target.getAttribute('data-component');
+        const data = componentData[componentId];
+        if (data) {
+          tooltipTitle.textContent = data.title;
+          tooltipContent.innerHTML = `${data.content}<code class="tooltip-code">${data.code}</code>`;
+          tooltip.classList.add('visible');
+        }
+      });
+
+      element.addEventListener('mousemove', (e) => {
+        tooltip.style.left = (e.pageX + 20) + 'px';
+        tooltip.style.top = (e.pageY + 20) + 'px';
+      });
+
+      element.addEventListener('mouseleave', () => {
+        tooltip.classList.remove('visible');
+      });
+    });
+  </script>
+</body>
+</html>
