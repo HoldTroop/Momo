@@ -2,13 +2,13 @@
 
 Comprehensive technical documentation for Momo, an autonomous AI browser agent built as a Chrome Manifest V3 extension with a Rust bridge and MCP server integration.
 
-## 📚 Documentation Overview
+## Documentation Overview
 
 This directory contains architecture documentation, design decisions, audit reports, and interactive visualizations explaining how Momo works under the hood.
 
 ---
 
-## 🏗️ Architecture Documentation
+## Architecture Documentation
 
 ### Core Architecture
 
@@ -38,7 +38,7 @@ See [architecture/README.md](architecture/README.md) for implementation details,
 
 ---
 
-## 📋 Architecture Decision Records (ADRs)
+## Architecture Decision Records (ADRs)
 
 Documented technical decisions with context, rationale, and consequences:
 
@@ -48,7 +48,7 @@ Future ADRs will document additional architectural decisions as the project evol
 
 ---
 
-## 🔍 Audit Reports
+## Audit Reports
 
 Comprehensive security and technical assessments:
 
@@ -57,7 +57,7 @@ Comprehensive security and technical assessments:
 
 ---
 
-## 📐 Diagram Sources
+## Diagram Sources
 
 Mermaid source files for architecture diagrams (`.mmd` format):
 
@@ -69,7 +69,7 @@ These files can be rendered using Mermaid CLI, GitHub's built-in renderer, or va
 
 ---
 
-## 🎯 Quick Navigation
+## Quick Navigation
 
 **New to Momo?** Start here:
 1. [ARCHITECTURE.md](ARCHITECTURE.md) - Get the big picture
@@ -86,7 +86,7 @@ These files can be rendered using Mermaid CLI, GitHub's built-in renderer, or va
 
 ---
 
-## 🤝 Contributing to Documentation
+## Contributing to Documentation
 
 ### When to Update Documentation
 
@@ -126,7 +126,7 @@ See [architecture/README.md](architecture/README.md) for:
 
 ---
 
-## 📦 File Structure
+## File Structure
 
 ```
 docs/
@@ -156,7 +156,7 @@ docs/
 
 ---
 
-## 🌐 Deployment
+## Deployment
 
 The interactive HTML visualizations in `architecture/` are deployed to **Wasmer Edge** for public access, allowing stakeholders, contributors, and users to explore Momo's architecture without cloning the repository.
 
@@ -164,13 +164,13 @@ Deployment is handled via the Wasmer CLI and configured in the project's deploym
 
 ---
 
-## 📄 License
+## License
 
 All documentation is part of the Momo project and follows the same license. See the root [LICENSE](../LICENSE) file for details.
 
 ---
 
-## 💬 Questions or Feedback?
+## Questions or Feedback?
 
 - Found an error in the documentation? Open an issue
 - Have suggestions for improvement? Submit a pull request

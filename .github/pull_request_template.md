@@ -12,10 +12,10 @@ easy to review and auto-categorize. See CONTRIBUTING.md for the full guide.
 <!-- Check the box that best describes the change. This feeds the release
      notes / CHANGELOG automatically. -->
 
-- [ ] 💥 Breaking change (requires a major version bump / migration note)
-- [ ] 🚀 New feature (`feat:`)
-- [ ] 🐛 Bug fix (`fix:`)
-- [ ] 🧰 Chore / refactor / docs / test / CI (no behavior change)
+- [ ] Breaking change (requires a major version bump / migration note)
+- [ ] New feature (`feat:`)
+- [ ] Bug fix (`fix:`)
+- [ ] Chore / refactor / docs / test / CI (no behavior change)
 
 ## Related issue
 

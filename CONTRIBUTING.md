@@ -53,10 +53,10 @@ release notes.
 
 | Prefix | Category | Example |
 |--------|----------|---------|
-| `feat:` | 🚀 Feature | `feat: add human-in-the-loop confirmation modal` |
-| `fix:` | 🐛 Fix | `fix: correct watchdog alarm period` |
-| `feat!` / `fix!` (or `BREAKING CHANGE:`) | 💥 Breaking | `feat!: drop legacy CDP websocket path` |
-| `chore:` / `refactor:` / `docs:` / `test:` / `ci:` / `perf:` | 🧰 Chore / Internal | `chore: pin cargo dependencies` |
+| `feat:` | Feature | `feat: add human-in-the-loop confirmation modal` |
+| `fix:` | Fix | `fix: correct watchdog alarm period` |
+| `feat!` / `fix!` (or `BREAKING CHANGE:`) | Breaking | `feat!: drop legacy CDP websocket path` |
+| `chore:` / `refactor:` / `docs:` / `test:` / `ci:` / `perf:` | Chore / Internal | `chore: pin cargo dependencies` |
 
 Format: `<type>[!][scope]: <short description>` — keep the subject under ~72
 characters, and put any migration notes in the body.

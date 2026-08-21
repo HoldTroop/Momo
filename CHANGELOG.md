@@ -8,10 +8,10 @@ Category mapping to Conventional Commit types:
 
 | Section | Commit types |
 |---------|--------------|
-| 💥 Breaking Changes | `feat!`, `fix!`, `refactor!`, or `BREAKING CHANGE:` in the body |
-| 🚀 Features | `feat:` |
-| 🐛 Fixes | `fix:` |
-| 🧰 Chore / Internal | `chore:`, `refactor:`, `docs:`, `style:`, `test:`, `ci:`, `perf:` |
+| Breaking Changes | `feat!`, `fix!`, `refactor!`, or `BREAKING CHANGE:` in the body |
+| Features | `feat:` |
+| Fixes | `fix:` |
+| Chore / Internal | `chore:`, `refactor:`, `docs:`, `style:`, `test:`, `ci:`, `perf:` |
 
 ---
 
@@ -21,7 +21,7 @@ Category mapping to Conventional Commit types:
 
 **Momo Architecture Visualization** - Critical TypeScript module augmentation fix
 
-### 🐛 Fixes
+### Fixes
 
 - **Custom shape registration** — Fixed TypeScript module augmentation conflicts preventing custom shapes from being recognized by tldraw at runtime. Consolidated all shape type declarations from individual files into a single `src/shapes/types.ts` file, ensuring proper type system merging and shape registration.
   - Created `src/shapes/types.ts` with unified `declare module "tldraw"` block
@@ -29,7 +29,7 @@ Category mapping to Conventional Commit types:
   - Removed individual module augmentation blocks from PackageShapeUtil, FileShapeUtil, ClassShapeUtil, FunctionShapeUtil, and RouteShapeUtil
   - Verified TypeScript compilation and runtime shape recognition
 
-### 🧰 Chore / Internal
+### Chore / Internal
 
 - Build and deployment verified on Wasmer Edge
 - Production URL: https://momo-architecture-map.wasmer.app
@@ -41,7 +41,7 @@ Security remediation of the external audit (`audit-report.md`, audited revision
 additional Rust build blockers the audit missed. `chrome.debugger` is now the
 sole input path; the Rust bridge is the authoritative policy boundary.
 
-### 🔒 Security
+### Security
 
 - **C1 — Enforce policy on trusted input.** `human_click` / `human_type` /
   `human_scroll` / `human_mouse_move` now authorize through the bridge's
@@ -62,7 +62,7 @@ sole input path; the Rust bridge is the authoritative policy boundary.
 - **M4 — Stop leaking typed text.** `human_type` no longer returns typed text in
   its summary; sensitive values are redacted before entering `state.history`.
 
-### 🐛 Fixes
+### Fixes
 
 - **H1 — Native-message type casing.** Added
   `#[serde(rename_all = "SCREAMING_SNAKE_CASE")]` to `BridgeRequest`; aligned
@@ -91,7 +91,7 @@ sole input path; the Rust bridge is the authoritative policy boundary.
   `DELETE_SESSION` deletes them.
 - **L3 — STOP_TASK aborts.** `handleStopTask` now calls `orchestrator.abortTask()`.
 
-### 🧰 Chore / Internal
+### Chore / Internal
 
 - **L4 — Tooling.** Added ESLint (flat config) to devDeps; drove
   `npx tsc --noEmit` and `npm run lint` to clean; pinned `tsconfig.json` to
@@ -120,13 +120,13 @@ tasks using your authenticated sessions, residential IP, and local hardware.
 - **Crash recovery** — write-ahead log + checkpoints in IndexedDB; survives SW kills, browser restarts, crashes.
 - **Side Panel UI** — real-time streaming, plan visualization, session management, intervention modals.
 
-### 💥 Breaking Changes
+### Breaking Changes
 
 - First functional release — no prior extension code to migrate from (`v0.1.0-legacy` was an empty README scaffold).
 - `debugger` and `<all_urls>` permissions moved to `optional_permissions` / `optional_host_permissions`; the `debugger` permission is now requested at runtime via `chrome.permissions.request` on first CDP attach (`ensureDebuggerPermission`, `src/lib/permissions.ts`), and denial degrades gracefully (CDP stays disabled until granted).
 - Native messaging host (`bridge/agent.bridge.json`) must be installed with `__EXTENSION_ID__` replaced by the loaded extension's ID.
 
-### 🚀 Features
+### Features
 
 - **Manifest V3 architecture** — service worker, offscreen document, side panel, content scripts.
 - **Service Worker** — `orchestrator.ts` state machine (pause/resume, page revision, idempotency keys, token budget), `message-router.ts` (13 handlers), `alarm-manager.ts` (keepalive/checkpoint/watchdog trilogy), `cdp-adapter.ts` (`chrome.debugger` wrapper).
@@ -141,14 +141,14 @@ tasks using your authenticated sessions, residential IP, and local hardware.
 - **Persistence** — IndexedDB (Dexie) with WAL + checkpoints, serialized via SuperJSON.
 - **Task queue** — priority queue with retry policies, exponential backoff, dead-letter handling.
 
-### 🐛 Fixes
+### Fixes
 
 - Vite build: removed deleted entry points (`fingerprint-guard.ts`, `anti-bot.ts`); fixed `llm-worker.ts` dynamic import.
 - Alarm manager: watchdog period corrected from 0.5 → 1 minute.
 - Orchestrator: `checkUrlMatches` made async; fixed `verifyStep` caller.
 - Icons: PNG icons generated from source image; manifest updated to reference PNG paths.
 
-### 🧰 Chore / Internal
+### Chore / Internal
 
 - Removed evasion code (`anti-bot.ts` 364 lines, `fingerprint-guard.ts` 227 lines) per Architecture Blueprint Section 7.
 - Bridge rewrite: `simulation.rs` → `InputExecutor`; removed Perlin noise, spring-damper, distribution sampling, micro-jitter, dwell/flight-time distributions, error injection.
@@ -172,7 +172,7 @@ Initial repository scaffold — README only. Baseline tag for the legacy release
 
 > Not applicable — this version contains no buildable extension code.
 
-### 🧰 Chore / Internal
+### Chore / Internal
 
 - Initial commit: `README.md`.
 
