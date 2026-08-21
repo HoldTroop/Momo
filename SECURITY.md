@@ -1,11 +1,21 @@
+<div align="center">
+
 # Security Policy
+
+**Momo's fail-closed policy engine and security practices**
 
 ![Security](https://img.shields.io/badge/security-first-brightgreen)
 [![Report Vulnerability](https://img.shields.io/badge/report-vulnerability-critical)](https://github.com/HoldTroop/Momo/security/advisories/new)
 
+</div>
+
+---
+
 ## Security First
 
 Momo is designed with security as a foundational principle. We employ a **fail-closed policy engine** architecture that ensures all automation is explicitly authorized through a trusted boundary. This document outlines our security practices, how to report vulnerabilities, and what to expect from our response process.
+
+---
 
 ## Supported Versions
 
@@ -14,6 +24,8 @@ Momo is designed with security as a foundational principle. We employ a **fail-c
 | 0.3.x   | Yes             | Current stable |
 | 0.2.x   | Security fixes only | Legacy line |
 | < 0.2   | No              | Please upgrade |
+
+---
 
 ## Reporting a Vulnerability
 
@@ -42,6 +54,8 @@ Please provide as much detail as possible:
 - Affected versions
 - Any suggested mitigations or fixes
 - Your contact information for follow-up
+
+---
 
 ## Severity Classification
 
@@ -87,6 +101,8 @@ We use a severity matrix based on CVSS 3.1 scoring with Momo-specific considerat
 **Response Time:** Fix in next major release or minor release  
 **Public Disclosure:** With release notes
 
+---
+
 ## Response Timeline
 
 - **Initial acknowledgment:** Within 48 hours of report
@@ -94,6 +110,8 @@ We use a severity matrix based on CVSS 3.1 scoring with Momo-specific considerat
 - **Regular updates:** Every 2 weeks during fix development
 - **Fix timeline:** Based on severity classification above
 - **CVE assignment:** For High and Critical vulnerabilities (coordinated with MITRE)
+
+---
 
 ## Disclosure Policy
 
@@ -126,6 +144,8 @@ Security researchers who responsibly disclose vulnerabilities will receive:
 
 We do not currently offer a bug bounty program but deeply appreciate the security research community's contributions.
 
+---
+
 ## Security Team
 
 ### Security Contact
@@ -140,6 +160,8 @@ We do not currently offer a bug bounty program but deeply appreciate the securit
 - Development Team: Core maintainers review all security issues
 
 For general questions about security practices (non-vulnerability), please open a public GitHub Discussion.
+
+---
 
 ## Out of Scope
 
@@ -165,6 +187,8 @@ The following are generally **NOT** considered security vulnerabilities:
 - Failure of the extension to work on intentionally blocked sites
 
 If you're uncertain whether an issue qualifies, please report it anyway. We'll evaluate and provide guidance.
+
+---
 
 ## Security Testing Guidelines
 
@@ -195,6 +219,8 @@ For security research, we recommend:
 5. Refer to [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for setup instructions
 
 If you need assistance setting up a test environment, contact us at security@holdtroop.dev.
+
+---
 
 ## Security Model
 
@@ -232,6 +258,8 @@ The policy engine checks:
 If the policy engine is unavailable, cannot evaluate a request, or encounters an error, all actions are **denied by default**. This fail-closed approach ensures that security cannot be bypassed through error conditions or race conditions.
 
 For architectural details, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+---
 
 ## Security Best Practices
 
@@ -279,6 +307,8 @@ When deploying Momo:
 - Review changes to policy configuration carefully
 - Follow secure coding practices for tool implementations
 
+---
+
 ## Past Security Advisories
 
 We maintain a record of all security advisories:
@@ -295,6 +325,8 @@ As of August 2026, no security vulnerabilities have been publicly disclosed. Thi
 We thank the following security researchers for their responsible disclosure:
 
 *No entries yet - be the first to help secure Momo!*
+
+---
 
 ## Security Updates and Notifications
 
@@ -320,12 +352,16 @@ Security releases follow our standard semantic versioning but are expedited:
 - **Security-only releases** may be published between regular releases
 - **Backports** to supported legacy versions (0.2.x) for critical issues
 
+---
+
 ## Additional Resources
 
 - [Architecture Documentation](docs/ARCHITECTURE.md) - Security architecture diagrams
 - [Security Audit Report](docs/audits/SECURITY_AUDIT_REPORT.md) - Third-party security assessment
 - [Policy Gate ADR](docs/adr/0001-policy-gate.md) - Design decisions for policy engine
 - [Development Guide](docs/DEVELOPMENT.md) - Secure development practices
+
+---
 
 ## Questions?
 
@@ -334,9 +370,14 @@ For security-related questions that are not vulnerability reports:
 - **Security practices:** security@holdtroop.dev
 - **General support:** [GitHub Issues](https://github.com/HoldTroop/Momo/issues)
 
----
+<div align="center">
 
 **Thank you for helping keep Momo and our community safe.**
 
-*Last updated: August 2026*  
+[Code of Conduct](CODE_OF_CONDUCT.md) · [Contributing](CONTRIBUTING.md) · [License](LICENSE)
+
+*Last updated: August 2026*
 *The Momo Security Team*
+
+</div>
+
