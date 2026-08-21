@@ -1,105 +1,310 @@
+<div align="center">
+
 # License
 
-Momo is licensed under the **PolyForm Noncommercial License 1.0.0**.
+**PolyForm Noncommercial License 1.0.0**
 
-## Summary
+[![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue.svg)](https://polyformproject.org/licenses/noncommercial/1.0.0)
+[![Noncommercial](https://img.shields.io/badge/use-noncommercial%20only-orange.svg)](LICENSE)
+[![Commercial Licensing](https://img.shields.io/badge/commercial-contact%20us-green.svg)](mailto:licensing@holdtroop.dev)
 
-- **Permitted:** Personal use, research, educational use, non-profit organizations
-- **Not Permitted:** Commercial use without separate license
-- **Attribution Required:** Copyright notices must be preserved
+</div>
+
+---
+
+## License Summary
+
+Momo is licensed under the **PolyForm Noncommercial License 1.0.0**, which allows free use for noncommercial purposes while requiring a separate license for commercial use.
+
+### Quick Reference
+
+| Use Case | Permitted | License Required |
+|----------|-----------|------------------|
+| **Personal Projects** | ✓ Yes | Free (this license) |
+| **Research & Education** | ✓ Yes | Free (this license) |
+| **Non-Profit Organizations** | ✓ Yes | Free (this license) |
+| **Open Source Contributions** | ✓ Yes | Free (this license) |
+| **Commercial Use** | ✗ No | Separate license required |
+| **Enterprise Deployment** | ✗ No | Separate license required |
+| **SaaS/Hosted Service** | ✗ No | Separate license required |
+
+### Permitted Uses
+
+- **Personal use** for research, experimentation, and learning
+- **Educational use** in academic institutions
+- **Non-profit organizations** regardless of funding source
+- **Public research** and open source contributions
+- **Private entertainment** and hobby projects
+
+### Not Permitted Without Commercial License
+
+- **Commercial software development** or deployment
+- **Enterprise internal tools** or productivity software
+- **SaaS offerings** or hosted services for customers
+- **Consulting services** using Momo as a core tool
+- **Revenue-generating applications** of any kind
+
+### Attribution Requirements
+
+Copyright notices must be preserved in all copies or substantial portions of the software.
+
+---
 
 ## Commercial Licensing
 
-For commercial use, enterprise deployments, or custom licensing arrangements, please contact:
-- **Email:** [INSERT COMMERCIAL LICENSE EMAIL]
-- **GitHub:** https://github.com/HoldTroop/Momo/issues (tag: commercial-license)
+For commercial use, enterprise deployments, or custom licensing arrangements, please contact us:
+
+**Commercial Licensing Contact:**
+- **Email:** licensing@holdtroop.dev
+- **Subject Line:** "Momo Commercial License Inquiry"
+- **GitHub:** Open an issue with tag `commercial-license`
+
+**What to Include in Your Inquiry:**
+- Your organization name and size
+- Intended use case and deployment scale
+- Number of users or instances
+- Any specific requirements or questions
+
+We offer flexible commercial licensing terms tailored to your organization's needs.
 
 ---
 
-# PolyForm Noncommercial License 1.0.0
+## Full License Text
 
-<https://polyformproject.org/licenses/noncommercial/1.0.0>
+### PolyForm Noncommercial License 1.0.0
 
-Required Notice: Copyright Alvee Ayan (https://github.com/HoldTroop/Momo)
+**License URL:** <https://polyformproject.org/licenses/noncommercial/1.0.0>
 
-## Acceptance
+**Required Notice:** Copyright Alvee Ayan (https://github.com/HoldTroop/Momo)
+
+---
+
+### Acceptance
 
 In order to get any license under these terms, you must agree to them as both strict obligations and conditions to all your licenses.
 
-## Copyright License
+---
 
-The licensor grants you a copyright license for the software to do everything you might do with the software that would otherwise infringe the licensor's copyright in it for any permitted purpose.  However, you may only distribute the software according to [Distribution License](#distribution-license) and make changes or new works based on the software according to [Changes and New Works License](#changes-and-new-works-license).
+### Copyright License
 
-## Distribution License
-
-The licensor grants you an additional copyright license to distribute copies of the software.  Your license to distribute covers distributing the software with changes and new works permitted by [Changes and New Works License](#changes-and-new-works-license).
-
-## Notices
-
-You must ensure that anyone who gets a copy of any part of the software from you also gets a copy of these terms or the URL for them above, as well as copies of any plain-text lines beginning with `Required Notice:` that the licensor provided with the software.  For example:
-
-> Required Notice: Copyright Yoyodyne, Inc. (http://example.com)
-
-## Changes and New Works License
-
-The licensor grants you an additional copyright license to make changes and new works based on the software for any permitted purpose.
-
-## Patent License
-
-The licensor grants you a patent license for the software that covers patent claims the licensor can license, or becomes able to license, that you would infringe by using the software.
-
-## Noncommercial Purposes
-
-Any noncommercial purpose is a permitted purpose.
-
-## Personal Uses
-
-Personal use for research, experiment, and testing for the benefit of public knowledge, personal study, private entertainment, hobby projects, amateur pursuits, or religious observance, without any anticipated commercial application, is use for a permitted purpose.
-
-## Noncommercial Organizations
-
-Use by any charitable organization, educational institution, public research organization, public safety or health organization, environmental protection organization, or government institution is use for a permitted purpose regardless of the source of funding or obligations resulting from the funding.
-
-## Fair Use
-
-You may have "fair use" rights for the software under the law. These terms do not limit them.
-
-## No Other Rights
-
-These terms do not allow you to sublicense or transfer any of your licenses to anyone else, or prevent the licensor from granting licenses to anyone else.  These terms do not imply any other licenses.
-
-## Patent Defense
-
-If you make any written claim that the software infringes or contributes to infringement of any patent, your patent license for the software granted under these terms ends immediately. If your company makes such a claim, your patent license ends immediately for work on behalf of your company.
-
-## Violations
-
-The first time you are notified in writing that you have violated any of these terms, or done anything with the software not covered by your licenses, your licenses can nonetheless continue if you come into full compliance with these terms, and take practical steps to correct past violations, within 32 days of receiving notice.  Otherwise, all your licenses end immediately.
-
-## No Liability
-
-***As far as the law allows, the software comes as is, without any warranty or condition, and the licensor will not be liable to you for any damages arising out of these terms or the use or nature of the software, under any kind of legal claim.***
-
-## Definitions
-
-The **licensor** is the individual or entity offering these terms, and the **software** is the software the licensor makes available under these terms.
-
-**You** refers to the individual or entity agreeing to these terms.
-
-**Your company** is any legal entity, sole proprietorship, or other kind of organization that you work for, plus all organizations that have control over, are under the control of, or are under common control with that organization.  **Control** means ownership of substantially all the assets of an entity, or the power to direct its management and policies by vote, contract, or otherwise.  Control can be direct or indirect.
-
-**Your licenses** are all the licenses granted to you for the software under these terms.
-
-**Use** means anything you do with the software requiring one of your licenses.
+The licensor grants you a copyright license for the software to do everything you might do with the software that would otherwise infringe the licensor's copyright in it for any permitted purpose. However, you may only distribute the software according to [Distribution License](#distribution-license) and make changes or new works based on the software according to [Changes and New Works License](#changes-and-new-works-license).
 
 ---
 
-## Questions About This License?
+### Distribution License
 
-- Read the [PolyForm FAQ](https://polyformproject.org/faq/)
-- Check our [Contributing Guide](CONTRIBUTING.md) for contribution terms
-- Open a [Discussion](https://github.com/HoldTroop/Momo/discussions) for licensing questions
+The licensor grants you an additional copyright license to distribute copies of the software. Your license to distribute covers distributing the software with changes and new works permitted by [Changes and New Works License](#changes-and-new-works-license).
 
-**License Version:** PolyForm Noncommercial 1.0.0  
-**License URL:** https://polyformproject.org/licenses/noncommercial/1.0.0  
-**Copyright Holder:** Alvee Ayan (HoldTroop/Momo)
+---
+
+### Notices
+
+You must ensure that anyone who gets a copy of any part of the software from you also gets a copy of these terms or the URL for them above, as well as copies of any plain-text lines beginning with `Required Notice:` that the licensor provided with the software.
+
+**Example:**
+> Required Notice: Copyright Alvee Ayan (https://github.com/HoldTroop/Momo)
+
+---
+
+### Changes and New Works License
+
+The licensor grants you an additional copyright license to make changes and new works based on the software for any permitted purpose.
+
+---
+
+### Patent License
+
+The licensor grants you a patent license for the software that covers patent claims the licensor can license, or becomes able to license, that you would infringe by using the software.
+
+---
+
+### Noncommercial Purposes
+
+Any noncommercial purpose is a permitted purpose.
+
+**What Qualifies as Noncommercial:**
+
+| Category | Examples |
+|----------|----------|
+| **Personal Use** | Hobby projects, personal automation, learning |
+| **Research** | Academic research, experiments, testing |
+| **Education** | Classroom use, teaching, student projects |
+| **Open Source** | Contributing to open source projects |
+| **Non-Profit** | Charitable organizations, NGOs, community projects |
+
+---
+
+### Personal Uses
+
+Personal use for research, experiment, and testing for the benefit of public knowledge, personal study, private entertainment, hobby projects, amateur pursuits, or religious observance, without any anticipated commercial application, is use for a permitted purpose.
+
+---
+
+### Noncommercial Organizations
+
+Use by any charitable organization, educational institution, public research organization, public safety or health organization, environmental protection organization, or government institution is use for a permitted purpose regardless of the source of funding or obligations resulting from the funding.
+
+**Qualified Organizations:**
+- Charitable organizations (registered 501(c)(3) or equivalent)
+- Educational institutions (schools, universities, training centers)
+- Public research organizations (government research labs, institutes)
+- Public safety and health organizations (hospitals, clinics, emergency services)
+- Environmental protection organizations
+- Government institutions (federal, state, local agencies)
+
+---
+
+### Fair Use
+
+You may have "fair use" rights for the software under the law. These terms do not limit them.
+
+---
+
+### No Other Rights
+
+These terms do not allow you to sublicense or transfer any of your licenses to anyone else, or prevent the licensor from granting licenses to anyone else. These terms do not imply any other licenses.
+
+---
+
+### Patent Defense
+
+If you make any written claim that the software infringes or contributes to infringement of any patent, your patent license for the software granted under these terms ends immediately. If your company makes such a claim, your patent license ends immediately for work on behalf of your company.
+
+---
+
+### Violations
+
+The first time you are notified in writing that you have violated any of these terms, or done anything with the software not covered by your licenses, your licenses can nonetheless continue if you come into full compliance with these terms, and take practical steps to correct past violations, within 32 days of receiving notice. Otherwise, all your licenses end immediately.
+
+**Cure Period:**
+- **Notice Received:** You have 32 days from written notification
+- **Required Actions:** Come into full compliance and correct past violations
+- **Failure to Cure:** All licenses terminate immediately after 32 days
+
+---
+
+### No Liability
+
+**IMPORTANT - DISCLAIMER OF WARRANTIES:**
+
+***As far as the law allows, the software comes as is, without any warranty or condition, and the licensor will not be liable to you for any damages arising out of these terms or the use or nature of the software, under any kind of legal claim.***
+
+**This means:**
+- No warranty of fitness for a particular purpose
+- No warranty of merchantability
+- No warranty of non-infringement
+- No liability for damages of any kind
+- Use at your own risk
+
+---
+
+### Definitions
+
+**Licensor:** The individual or entity offering these terms (Alvee Ayan / HoldTroop).
+
+**Software:** The software the licensor makes available under these terms (Momo autonomous AI browser extension).
+
+**You:** The individual or entity agreeing to these terms.
+
+**Your Company:** Any legal entity, sole proprietorship, or other kind of organization that you work for, plus all organizations that have control over, are under the control of, or are under common control with that organization.
+
+**Control:** Ownership of substantially all the assets of an entity, or the power to direct its management and policies by vote, contract, or otherwise. Control can be direct or indirect.
+
+**Your Licenses:** All the licenses granted to you for the software under these terms.
+
+**Use:** Anything you do with the software requiring one of your licenses.
+
+---
+
+## Frequently Asked Questions
+
+### Can I use Momo for my startup?
+
+**No**, not under this license. Startup use is considered commercial. Contact us for commercial licensing.
+
+### Can I use Momo in my university research project?
+
+**Yes**, educational and research use is permitted under this license.
+
+### Can I modify Momo and distribute my modified version?
+
+**Yes**, for noncommercial purposes only. Your modified version must also be licensed under the same PolyForm Noncommercial License, and you must preserve attribution.
+
+### Can a non-profit organization use Momo?
+
+**Yes**, use by qualified non-profit organizations is permitted regardless of funding source.
+
+### What happens if I violate the license?
+
+You'll receive written notice and have 32 days to cure the violation. If you come into compliance within that period, your license continues. Otherwise, all licenses terminate immediately.
+
+### Can I contribute to Momo under this license?
+
+**Yes**, open source contributions are permitted and encouraged. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+### How do I get a commercial license?
+
+Contact us at licensing@holdtroop.dev with details about your use case, and we'll provide a quote for commercial licensing.
+
+---
+
+## Additional Resources
+
+### Documentation
+
+- **[PolyForm Project](https://polyformproject.org/)** - Learn more about PolyForm licenses
+- **[PolyForm FAQ](https://polyformproject.org/faq/)** - Common questions about PolyForm licenses
+- **[License Comparison](https://polyformproject.org/licenses/)** - Compare different PolyForm license types
+
+### Project Resources
+
+- **[Contributing Guide](CONTRIBUTING.md)** - How to contribute to Momo
+- **[Code of Conduct](CODE_OF_CONDUCT.md)** - Community behavior standards
+- **[Security Policy](SECURITY.md)** - Security practices and reporting
+- **[GitHub Discussions](https://github.com/HoldTroop/Momo/discussions)** - Ask licensing questions
+
+---
+
+## License Metadata
+
+| Property | Value |
+|----------|-------|
+| **License Name** | PolyForm Noncommercial License 1.0.0 |
+| **License URL** | https://polyformproject.org/licenses/noncommercial/1.0.0 |
+| **SPDX Identifier** | PolyForm-Noncommercial-1.0.0 |
+| **Copyright Holder** | Alvee Ayan |
+| **Project URL** | https://github.com/HoldTroop/Momo |
+| **Effective Date** | August 2026 |
+
+---
+
+## Contact
+
+### Questions About This License?
+
+**General Licensing Questions:**
+- **GitHub Discussions:** [Open a discussion](https://github.com/HoldTroop/Momo/discussions)
+- **Email:** licensing@holdtroop.dev
+
+**Commercial Licensing:**
+- **Email:** licensing@holdtroop.dev
+- **Subject:** "Momo Commercial License Inquiry"
+
+**Legal Inquiries:**
+- **Email:** legal@holdtroop.dev
+
+**Security Concerns:**
+- **Email:** security@holdtroop.dev
+- See [SECURITY.md](SECURITY.md) for security policy
+
+---
+
+<div align="center">
+
+**Thank you for respecting our license terms**
+
+[Read Full License](https://polyformproject.org/licenses/noncommercial/1.0.0) · [Request Commercial License](mailto:licensing@holdtroop.dev) · [Ask Questions](https://github.com/HoldTroop/Momo/discussions)
+
+**Copyright © 2026 Alvee Ayan. All rights reserved.**
+
+</div>
