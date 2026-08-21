@@ -1,3 +1,21 @@
+# License
+
+Momo is licensed under the **PolyForm Noncommercial License 1.0.0**.
+
+## Summary
+
+- ✅ **Permitted:** Personal use, research, educational use, non-profit organizations
+- ❌ **Not Permitted:** Commercial use without separate license
+- 📝 **Attribution Required:** Copyright notices must be preserved
+
+## Commercial Licensing
+
+For commercial use, enterprise deployments, or custom licensing arrangements, please contact:
+- **Email:** [INSERT COMMERCIAL LICENSE EMAIL]
+- **GitHub:** https://github.com/HoldTroop/Momo/issues (tag: commercial-license)
+
+---
+
 # PolyForm Noncommercial License 1.0.0
 
 <https://polyformproject.org/licenses/noncommercial/1.0.0>
@@ -73,3 +91,15 @@ The **licensor** is the individual or entity offering these terms, and the **sof
 **Your licenses** are all the licenses granted to you for the software under these terms.
 
 **Use** means anything you do with the software requiring one of your licenses.
+
+---
+
+## Questions About This License?
+
+- Read the [PolyForm FAQ](https://polyformproject.org/faq/)
+- Check our [Contributing Guide](CONTRIBUTING.md) for contribution terms
+- Open a [Discussion](https://github.com/HoldTroop/Momo/discussions) for licensing questions
+
+**License Version:** PolyForm Noncommercial 1.0.0  
+**License URL:** https://polyformproject.org/licenses/noncommercial/1.0.0  
+**Copyright Holder:** Alvee Ayan (HoldTroop/Momo)
