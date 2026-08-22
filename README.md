@@ -161,7 +161,13 @@ Get Momo running in 5 minutes.
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+### Five-Layer Architecture
+
+![Momo Five-Layer Architecture](./docs/assets/svgs/momo_five_layer_architecture.svg)
+
 **Trust Boundary**: The Rust bridge is the authoritative policy boundary. The extension never self-authorizes; all actions pass through `PolicyEngine::evaluate` before execution.
+
+![Momo Trust Boundary](./docs/assets/svgs/momo_trust_boundary.svg)
 
 ---
 
@@ -247,6 +253,8 @@ export MOMO_COMMAND_TIMEOUT_MS=30000
 
 #### Policy Configuration
 
+![Momo Policy Engine Pipeline](./docs/assets/svgs/momo_policy_engine_pipeline.svg)
+
 The bridge creates a SQLite database at `~/.momo/policy.db` on first run. Policy configuration is managed through the bridge's `POLICY_SET_CONFIG` request or by editing the database directly.
 
 Default policy (fail-closed):
@@ -275,6 +283,10 @@ To allow specific origins:
 
 ## Usage
 
+### Mode A vs Mode B
+
+![Momo Mode A vs Mode B](./docs/assets/svgs/momo_mode_a_vs_mode_b.svg)
+
 ### Mode A: Internal Orchestration (Default)
 
 Start the bridge in orchestration mode (WebSocket only, no MCP):
@@ -294,6 +306,8 @@ Task: "Find the cheapest flight from SFO to NYC on Google Flights for next weeke
 The orchestrator plans, executes, and streams results to the side panel in real-time.
 
 ### Mode B: MCP over stdio
+
+![Momo MCP Execute Action Sequence](./docs/assets/svgs/momo_mcp_execute_action_sequence.svg)
 
 Run the bridge in MCP mode:
 
