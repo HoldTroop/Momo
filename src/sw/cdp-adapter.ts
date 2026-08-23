@@ -7,10 +7,10 @@ declare const chrome: {
     getTargets: (callback: (targets: CdpTargetInfo[]) => void) => void;
     attach: (target: { targetId: string }, version: string, callback: () => void) => void;
     detach: (target: { targetId: string }, callback: () => void) => void;
-    sendCommand: (target: { targetId: string }, method: string, params?: any, callback?: (result: any) => void) => void;
+    sendCommand: (target: { targetId: string }, method: string, params?: unknown, callback?: (result: unknown) => void) => void;
     onEvent: {
-      addListener: (callback: (source: CdpDebuggee, method: string, params: any) => void) => void;
-      removeListener: (callback: (source: CdpDebuggee, method: string, params: any) => void) => void;
+      addListener: (callback: (source: CdpDebuggee, method: string, params: unknown) => void) => void;
+      removeListener: (callback: (source: CdpDebuggee, method: string, params: unknown) => void) => void;
     };
     onDetach: {
       addListener: (callback: (source: CdpDebuggee, reason: string) => void) => void;
@@ -47,20 +47,113 @@ export interface CdpTarget {
   attached: boolean;
 }
 
+// CDP Protocol response types
+export interface CdpAXTree {
+  nodes: unknown[];
+}
+
+export interface CdpDOMNode {
+  nodeId: number;
+  backendNodeId?: number;
+  nodeType: number;
+  nodeName: string;
+  localName?: string;
+  nodeValue?: string;
+  childNodeCount?: number;
+  children?: CdpDOMNode[];
+  attributes?: string[];
+  documentURL?: string;
+  baseURL?: string;
+  publicId?: string;
+  systemId?: string;
+  internalSubset?: string;
+  xmlVersion?: string;
+  name?: string;
+  value?: string;
+  pseudoType?: string;
+  shadowRootType?: string;
+  frameId?: string;
+  contentDocument?: CdpDOMNode;
+  shadowRoots?: CdpDOMNode[];
+  templateContent?: CdpDOMNode;
+  pseudoElements?: CdpDOMNode[];
+  importedDocument?: CdpDOMNode;
+  distributedNodes?: unknown[];
+  isSVG?: boolean;
+}
+
+export interface CdpDocument {
+  root: CdpDOMNode;
+}
+
+export interface CdpQuerySelectorResult {
+  nodeId: number;
+}
+
+export interface CdpBoxModel {
+  content: number[];
+  padding: number[];
+  border: number[];
+  margin: number[];
+  width: number;
+  height: number;
+}
+
+export interface CdpContentQuads {
+  quads: number[][];
+}
+
+export interface CdpNodeForLocation {
+  backendNodeId: number;
+  frameId: string;
+  nodeId?: number;
+}
+
+export interface CdpRuntimeEvaluateResult {
+  result: {
+    type: string;
+    value?: unknown;
+    unserializableValue?: string;
+    description?: string;
+    objectId?: string;
+    className?: string;
+    subtype?: string;
+  };
+  exceptionDetails?: {
+    exceptionId: number;
+    text: string;
+    lineNumber: number;
+    columnNumber: number;
+    scriptId?: string;
+    url?: string;
+    stackTrace?: unknown;
+    exception?: unknown;
+    executionContextId?: number;
+  };
+}
+
+export interface CdpOuterHTML {
+  outerHTML: string;
+}
+
+export interface CdpEventParams {
+  [key: string]: unknown;
+}
+
 export interface CdpSession {
   sessionId: string;
   targetId: string;
-  onEvent: (method: string, params: any) => void;
+  onEvent: (method: string, params: CdpEventParams) => void;
   onDetach: (reason: string) => void;
   /** Internal handler refs so detach() can remove the listeners added in attach(). */
-  _eventListener?: (source: CdpDebuggee, method: string, params: any) => void;
+  _eventListener?: (source: CdpDebuggee, method: string, params: unknown) => void;
   _detachListener?: (source: CdpDebuggee, reason: string) => void;
 }
 
 class CdpAdapter {
   private sessions: Map<string, CdpSession> = new Map();
   private targetListeners: Map<string, (targetInfo: CdpTargetInfo) => void> = new Map();
-  private eventListeners: Map<string /*sessionId*/, Map<string /*method*/, Set<(method: string, params: any) => void>>> = new Map();
+  private eventListeners: Map<string /*sessionId*/, Map<string /*method*/, Set<(method: string, params: CdpEventParams) => void>>> = new Map();
   private sessionDetachedCallbacks: Set<(sessionId: string) => void> = new Set();
 
   async getTargets(): Promise<CdpTarget[]> {
@@ -116,7 +209,7 @@ class CdpAdapter {
         // Set up event listeners for this target, keeping refs so they can be removed.
         session._eventListener = (source, method, params) => {
           if (source.targetId === targetId) {
-            session.onEvent(method, params);
+            session.onEvent(method, params as CdpEventParams);
           }
         };
         session._detachListener = (source, reason) => {
@@ -172,7 +265,7 @@ class CdpAdapter {
     this.eventListeners.delete(session.sessionId);
   }
 
-  async sendCommand<T = any>(sessionId: string, domain: string, command: string, params: any = {}): Promise<T> {
+  async sendCommand<T = unknown>(sessionId: string, domain: string, command: string, params: Record<string, unknown> = {}): Promise<T> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       throw new Error(`Session not found: ${sessionId}`);
@@ -194,7 +287,7 @@ class CdpAdapter {
     });
   }
 
-  onEvent(sessionId: string, method: string, callback: (method: string, params: any) => void): () => void {
+  onEvent(sessionId: string, method: string, callback: (method: string, params: CdpEventParams) => void): () => void {
     let methodMap = this.eventListeners.get(sessionId);
     if (!methodMap) {
       methodMap = new Map();
@@ -220,31 +313,31 @@ class CdpAdapter {
     };
   }
 
-  async getAxTree(sessionId: string): Promise<any> {
+  async getAxTree(sessionId: string): Promise<CdpAXTree> {
     return this.sendCommand(sessionId, 'Accessibility', 'getFullAXTree', {});
   }
 
-  async getDocument(sessionId: string): Promise<any> {
+  async getDocument(sessionId: string): Promise<CdpDocument> {
     return this.sendCommand(sessionId, 'DOM', 'getDocument', { depth: -1, pierce: true });
   }
 
-  async querySelector(sessionId: string, nodeId: number, selector: string): Promise<any> {
+  async querySelector(sessionId: string, nodeId: number, selector: string): Promise<CdpQuerySelectorResult> {
     return this.sendCommand(sessionId, 'DOM', 'querySelector', { nodeId, selector });
   }
 
-  async getBoxModel(sessionId: string, nodeId: number): Promise<any> {
+  async getBoxModel(sessionId: string, nodeId: number): Promise<CdpBoxModel> {
     return this.sendCommand(sessionId, 'DOM', 'getBoxModel', { nodeId });
   }
 
-  async getContentQuads(sessionId: string, nodeId: number): Promise<any> {
+  async getContentQuads(sessionId: string, nodeId: number): Promise<CdpContentQuads> {
     return this.sendCommand(sessionId, 'DOM', 'getContentQuads', { nodeId });
   }
 
-  async getNodeForLocation(sessionId: string, x: number, y: number): Promise<any> {
+  async getNodeForLocation(sessionId: string, x: number, y: number): Promise<CdpNodeForLocation> {
     return this.sendCommand(sessionId, 'DOM', 'getNodeForLocation', { x, y, includeUserAgentShadowDOM: true });
   }
 
-  async executeScript(sessionId: string, script: string): Promise<any> {
+  async executeScript(sessionId: string, script: string): Promise<CdpRuntimeEvaluateResult> {
     // For script execution, use Runtime domain
     return this.sendCommand(sessionId, 'Runtime', 'evaluate', {
       expression: script,
@@ -253,19 +346,19 @@ class CdpAdapter {
     });
   }
 
-  async setInputFiles(sessionId: string, nodeId: number, files: string[]): Promise<any> {
+  async setInputFiles(sessionId: string, nodeId: number, files: string[]): Promise<void> {
     return this.sendCommand(sessionId, 'DOM', 'setFileInputFiles', { nodeId, files });
   }
 
-  async focus(sessionId: string, nodeId: number): Promise<any> {
+  async focus(sessionId: string, nodeId: number): Promise<void> {
     return this.sendCommand(sessionId, 'DOM', 'focus', { nodeId });
   }
 
-  async scrollIntoView(sessionId: string, nodeId: number): Promise<any> {
+  async scrollIntoView(sessionId: string, nodeId: number): Promise<void> {
     return this.sendCommand(sessionId, 'DOM', 'scrollIntoView', { nodeId });
   }
 
-  async getOuterHTML(sessionId: string, nodeId: number): Promise<any> {
+  async getOuterHTML(sessionId: string, nodeId: number): Promise<CdpOuterHTML> {
     return this.sendCommand(sessionId, 'DOM', 'getOuterHTML', { nodeId });
   }
 
@@ -277,22 +370,31 @@ class CdpAdapter {
     button: 'left' | 'right' | 'middle' = 'left',
     clickCount = 1,
     abortSignal?: AbortSignal,
-  ): Promise<any> {
+  ): Promise<void> {
     if (abortSignal?.aborted) {
       throw new Error('Operation cancelled');
     }
     return this.sendCommand(sessionId, 'Input', 'dispatchMouseEvent', { type, x, y, button, clickCount });
   }
 
-  async insertText(sessionId: string, text: string, abortSignal?: AbortSignal): Promise<any> {
+  async insertText(sessionId: string, text: string, abortSignal?: AbortSignal): Promise<void> {
     if (abortSignal?.aborted) {
       throw new Error('Operation cancelled');
     }
     return this.sendCommand(sessionId, 'Input', 'insertText', { text });
   }
 
-  async dispatchKeyEvent(sessionId: string, key: string, type: 'keyDown' | 'keyUp'): Promise<any> {
-    return this.sendCommand(sessionId, 'Input', 'dispatchKeyEvent', { type, key });
+  async dispatchKeyEvent(
+    sessionId: string,
+    key: string,
+    type: 'keyDown' | 'keyUp',
+    modifiers?: number,
+  ): Promise<void> {
+    const params: Record<string, unknown> = { type, key };
+    if (modifiers !== undefined) {
+      params.modifiers = modifiers;
+    }
+    return this.sendCommand(sessionId, 'Input', 'dispatchKeyEvent', params);
   }
 
   getActiveSessions(): string[] {
