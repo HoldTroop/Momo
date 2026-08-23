@@ -14,16 +14,53 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ToolRegistry } from '../tool-registry';
 import { isSensitiveInput } from '../redaction';
+import type { ToolContext } from '../tools/types';
 import fs from 'node:fs';
 import path from 'node:path';
 
+// Authorization request structure
+interface AuthRequest {
+  type: string;
+  payload: {
+    session_id?: string;
+    origin?: string;
+    target?: string;
+    selector?: string | null;
+    text?: string;
+    field_is_sensitive?: boolean;
+    page_revision?: number;
+  };
+}
+
+// Authorization response structure
+interface AuthResponse {
+  decision: { allowed: boolean; requires_confirmation: boolean; risk_class: string };
+  action_hash: string;
+}
+
+// Chrome scripting API mock types
+interface ExecuteScriptResult {
+  success: boolean;
+  type?: string;
+  autocomplete?: string;
+  name?: string;
+  id?: string;
+  error?: string;
+}
+
+interface ChromeMock {
+  scripting: {
+    executeScript: (args: { target: { tabId: number; allFrames: boolean }; func: (...args: unknown[]) => unknown; args?: unknown[] }) => Promise<Array<{ result: ExecuteScriptResult | null }>>;
+  };
+}
+
 // Capture authorization payloads for assertion
-let capturedAuthPayload: any = null;
+let capturedAuthPayload: AuthRequest | null = null;
 
 // Mock the WebSocket client before any imports
 vi.mock('../../sw/ws-client', () => ({
   getWsClient: () => ({
-    send: vi.fn(async (type: string, payload: any) => {
+    send: vi.fn(async (type: string, payload: AuthRequest): Promise<AuthResponse | null> => {
       if (type === 'POLICY_CHECK' || payload?.type === 'SIMULATE_TYPE') {
         capturedAuthPayload = payload;
         return {
@@ -45,18 +82,25 @@ vi.mock('../../sw/cdp-adapter', () => ({
 
 describe('human_type fieldIsSensitive preservation (INTEGRATION)', () => {
   let registry: ToolRegistry;
-  let mockContext: any;
+  let mockContext: ToolContext;
 
   beforeEach(() => {
     vi.clearAllMocks();
     capturedAuthPayload = null;
 
     registry = new ToolRegistry();
-    
+
     mockContext = {
-      dom: { url: 'https://example.com/login' },
+      dom: {
+        url: 'https://example.com/login',
+        title: 'Login Page',
+        actions: [],
+        summary: 'Test page',
+        layout: { role: 'main', bounds: { x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 }, children: [] },
+        timestamp: Date.now(),
+      },
       variables: {},
-      step: { tool: 'human_type', arguments: {} },
+      step: { name: 'human_type', arguments: {} },
       allowlist: ['example.com'],
       tokenBudget: { max: 1000, used: 0 },
       pageRevision: 1,
@@ -97,7 +141,7 @@ describe('human_type fieldIsSensitive preservation (INTEGRATION)', () => {
       scripting: {
         executeScript: mockExecuteScript,
       },
-    } as any;
+    } as unknown as typeof chrome;
 
     // Execute the human_type tool with ref_id
     const humanTypeTool = registry['tools'].get('human_type');
@@ -117,8 +161,9 @@ describe('human_type fieldIsSensitive preservation (INTEGRATION)', () => {
 
     // CRITICAL ASSERTION: Authorization was called with field_is_sensitive: true
     expect(capturedAuthPayload).toBeDefined();
-    expect(capturedAuthPayload.payload).toBeDefined();
-    expect(capturedAuthPayload.payload.field_is_sensitive).toBe(true);
+    expect(capturedAuthPayload).not.toBeNull();
+    expect(capturedAuthPayload!.payload).toBeDefined();
+    expect(capturedAuthPayload!.payload.field_is_sensitive).toBe(true);
 
     // Verify the ref_id-derived password field was correctly identified
     expect(mockExecuteScript).toHaveBeenCalledTimes(1);
@@ -164,7 +209,8 @@ describe('human_type fieldIsSensitive preservation (INTEGRATION)', () => {
 
     // Verify authorization received the ref-derived sensitivity (true)
     expect(result.success).toBe(true);
-    expect(capturedAuthPayload.payload.field_is_sensitive).toBe(true);
+    expect(capturedAuthPayload).not.toBeNull();
+    expect(capturedAuthPayload!.payload.field_is_sensitive).toBe(true);
     
     // If the bug existed, this would be false because the else block
     // would have re-declared fieldIsSensitive in outer scope
@@ -205,7 +251,8 @@ describe('human_type fieldIsSensitive preservation (INTEGRATION)', () => {
     expect(result.success).toBe(true);
 
     // field_is_sensitive should be false (plain text search field)
-    expect(capturedAuthPayload.payload.field_is_sensitive).toBe(false);
+    expect(capturedAuthPayload).not.toBeNull();
+    expect(capturedAuthPayload!.payload.field_is_sensitive).toBe(false);
   });
 
   it('verifies isSensitiveInput correctly identifies password fields', () => {
