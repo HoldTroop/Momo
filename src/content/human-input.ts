@@ -9,6 +9,23 @@ interface SimulationProfile {
   errorRate: number;
 }
 
+type SimulatorMessage =
+  | { type: 'SIMULATE_CLICK'; payload: { x: number; y: number; profile?: Partial<SimulationProfile> } }
+  | { type: 'SIMULATE_TYPE'; payload: { text: string; profile?: Partial<SimulationProfile> } }
+  | { type: 'SIMULATE_SCROLL'; payload: { x: number; y: number; deltaX: number; deltaY: number; profile?: Partial<SimulationProfile> } }
+  | { type: 'SIMULATE_MOUSE_MOVE'; payload: { fromX: number; fromY: number; toX: number; toY: number; profile?: Partial<SimulationProfile> } }
+  | { type: 'SET_PROFILE'; payload: Partial<SimulationProfile> };
+
+type SimulatorResponse =
+  | { success: true }
+  | { success: false; error: string };
+
+declare global {
+  interface Window {
+    __humanInput?: HumanInputSimulator;
+  }
+}
+
 class HumanInputSimulator {
   private profile: SimulationProfile;
   private isSimulating = false;
@@ -29,72 +46,59 @@ class HumanInputSimulator {
     }
   }
 
-  private handleMessage(message: any, sender: chrome.runtime.MessageSender, sendResponse: (response: any) => void) {
-    const p = message.payload;
-    if (!p || typeof p !== 'object') {
-      sendResponse({ success: false, error: 'Missing payload' });
-      return;
-    }
-
+  private handleMessage(message: SimulatorMessage, sender: chrome.runtime.MessageSender, sendResponse: (response: SimulatorResponse) => void) {
     const sendError = (e: unknown) => sendResponse({ success: false, error: String(e) });
 
     try {
       switch (message.type) {
         case 'SIMULATE_CLICK': {
-          const x = Number(p.x);
-          const y = Number(p.y);
+          const { x, y, profile } = message.payload;
           if (!Number.isFinite(x) || !Number.isFinite(y)) {
             sendResponse({ success: false, error: 'Invalid payload: x/y must be finite numbers' });
             return;
           }
-          this.simulateClick(x, y, p.profile)
+          this.simulateClick(x, y, profile)
             .then(() => sendResponse({ success: true }))
             .catch(sendError);
           break;
         }
-        case 'SIMULATE_TYPE':
-          if (typeof p.text !== 'string') {
+        case 'SIMULATE_TYPE': {
+          const { text, profile } = message.payload;
+          if (typeof text !== 'string') {
             sendResponse({ success: false, error: 'Invalid payload: text must be a string' });
             return;
           }
-          this.simulateType(p.text, p.profile)
+          this.simulateType(text, profile)
             .then(() => sendResponse({ success: true }))
             .catch(sendError);
           break;
+        }
         case 'SIMULATE_SCROLL': {
-          const x = Number(p.x);
-          const y = Number(p.y);
-          const deltaX = Number(p.deltaX);
-          const deltaY = Number(p.deltaY);
+          const { x, y, deltaX, deltaY, profile } = message.payload;
           if (![x, y, deltaX, deltaY].every(Number.isFinite)) {
             sendResponse({ success: false, error: 'Invalid payload: x/y/deltaX/deltaY must be finite numbers' });
             return;
           }
-          this.simulateScroll(x, y, deltaX, deltaY, p.profile)
+          this.simulateScroll(x, y, deltaX, deltaY, profile)
             .then(() => sendResponse({ success: true }))
             .catch(sendError);
           break;
         }
         case 'SIMULATE_MOUSE_MOVE': {
-          const fromX = Number(p.fromX);
-          const fromY = Number(p.fromY);
-          const toX = Number(p.toX);
-          const toY = Number(p.toY);
+          const { fromX, fromY, toX, toY, profile } = message.payload;
           if (![fromX, fromY, toX, toY].every(Number.isFinite)) {
             sendResponse({ success: false, error: 'Invalid payload: fromX/fromY/toX/toY must be finite numbers' });
             return;
           }
-          this.simulateMouseMove(fromX, fromY, toX, toY, p.profile)
+          this.simulateMouseMove(fromX, fromY, toX, toY, profile)
             .then(() => sendResponse({ success: true }))
             .catch(sendError);
           break;
         }
         case 'SET_PROFILE':
-          this.profile = { ...this.profile, ...p };
+          this.profile = { ...this.profile, ...message.payload };
           sendResponse({ success: true });
           break;
-        default:
-          sendResponse({ success: false, error: `Unknown message type: ${String(message.type)}` });
       }
     } catch (e) {
       sendResponse({ success: false, error: String(e) });
@@ -258,4 +262,6 @@ class HumanInputSimulator {
 }
 
 const humanInput = new HumanInputSimulator();
-(window as any).__humanInput = humanInput;
+window.__humanInput = humanInput;
+
+export {};
