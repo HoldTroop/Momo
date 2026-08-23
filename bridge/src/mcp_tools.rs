@@ -273,7 +273,7 @@ async fn dispatch_tool_call(cm: &ConnectionManager, name: &str, arguments: Value
 fn map_command_result(result: &Value) -> Value {
     // A non-null `error` field (early guard like "No active session", a thrown
     // dispatch error, or an inconsistent success+error payload) always fails.
-    if result.get("error").map_or(false, |e| !e.is_null()) {
+    if result.get("error").is_some_and(|e| !e.is_null()) {
         return tool_error(result);
     }
     match result.get("success").and_then(Value::as_bool) {

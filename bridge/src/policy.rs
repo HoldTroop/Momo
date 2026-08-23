@@ -610,10 +610,6 @@ impl PolicyEngine {
         Ok(entries)
     }
 
-    pub fn get_token_usage(&self) -> u64 {
-        *self.token_usage.read()
-    }
-
     pub fn get_config(&self) -> PolicyConfig {
         self.config.read().clone()
     }
@@ -644,8 +640,10 @@ mod tests {
             n
         ));
         let engine = PolicyEngine::new(path.clone()).expect("open test db");
-        let mut config = PolicyConfig::default();
-        config.allowlist = allowlist;
+        let config = PolicyConfig {
+            allowlist,
+            ..PolicyConfig::default()
+        };
         engine.save_config(&config).expect("save config");
         let _ = std::fs::remove_file(path);
         engine

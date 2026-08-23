@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use axum::{routing::get, Router};
-use dirs;
 use fs2::FileExt;
 use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};

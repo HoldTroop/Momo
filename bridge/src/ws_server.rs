@@ -40,7 +40,6 @@ pub enum CommandError {
 
 /// A single WebSocket connection to the extension.
 struct WsConnection {
-    id: Uuid,
     sender: mpsc::Sender<BridgeResponse>,
     session_id: Option<String>,
     last_pong: Instant,
@@ -79,7 +78,6 @@ impl ConnectionManager {
         let expected_token = self.bridge_server.auth_token();
 
         let conn = WsConnection {
-            id: conn_id,
             sender: tx,
             session_id: None,
             last_pong: Instant::now(),
@@ -113,7 +111,7 @@ impl ConnectionManager {
                             Some(response) => {
                                 match serde_json::to_vec(&response) {
                                     Ok(bytes) => {
-                                        if ws_sender.send(Message::Binary(bytes.into())).await.is_err() {
+                                        if ws_sender.send(Message::Binary(bytes)).await.is_err() {
                                             debug!("WS write error (connection likely closed): {}", conn_id);
                                             break;
                                         }
@@ -225,16 +223,6 @@ impl ConnectionManager {
         let _ = tokio::join!(write_loop, read_loop);
     }
 
-    /// Broadcast an event to all connected clients.
-    pub async fn broadcast(&self, event: BridgeResponse) {
-        let conns = self.connections.read().await;
-        for conn in conns.values() {
-            // try_send: a full channel means the client has stalled reading;
-            // drop the event (the heartbeat will evict the connection).
-            let _ = conn.sender.try_send(event.clone());
-        }
-    }
-
     /// Issue a bridge→extension command and await its `CommandResult`
     /// (PHASE9_MCP_PLAN.md §6). Used by the MCP server (Mode B) to request
     /// perception and actions from the extension over the same WebSocket the
@@ -303,7 +291,8 @@ impl ConnectionManager {
         }
     }
 
-    /// Get the number of active connections.
+    /// Get the number of active connections (test helper).
+    #[cfg(test)]
     pub async fn connection_count(&self) -> usize {
         self.connections.read().await.len()
     }
@@ -584,8 +573,10 @@ mod tests {
         // allowlist). Give the test engine a permissive allowlist so
         // policy-gated MCP round-trip tests reach the fake extension; "local"
         // is the normalized host of the gate's default origin "mcp://local".
-        let mut policy_config = crate::policy::PolicyConfig::default();
-        policy_config.allowlist = vec!["local".to_string()];
+        let policy_config = crate::policy::PolicyConfig {
+            allowlist: vec!["local".to_string()],
+            ..crate::policy::PolicyConfig::default()
+        };
         bridge
             .policy_engine()
             .save_config(&policy_config)
@@ -615,7 +606,7 @@ mod tests {
         // C6: authenticate before any other frame.
         let auth = serde_json::json!({ "type": "AUTH", "payload": { "token": "test-token" } });
         stream
-            .send(WsMessage::Binary(serde_json::to_vec(&auth).unwrap().into()))
+            .send(WsMessage::Binary(serde_json::to_vec(&auth).unwrap()))
             .await
             .expect("AUTH send");
         let frame = read_until(&mut stream, std::time::Duration::from_secs(5), |v| {
@@ -645,7 +636,7 @@ mod tests {
         // Note: PING is a unit variant — no "payload" field on the wire.
         let ping = serde_json::json!({ "id": "req-unauth-1", "type": "PING" });
         client
-            .send(WsMessage::Binary(serde_json::to_vec(&ping).unwrap().into()))
+            .send(WsMessage::Binary(serde_json::to_vec(&ping).unwrap()))
             .await
             .unwrap();
 
@@ -680,7 +671,7 @@ mod tests {
 
         let auth = serde_json::json!({ "type": "AUTH", "payload": { "token": "wrong-token" } });
         client
-            .send(WsMessage::Binary(serde_json::to_vec(&auth).unwrap().into()))
+            .send(WsMessage::Binary(serde_json::to_vec(&auth).unwrap()))
             .await
             .unwrap();
 
@@ -765,18 +756,16 @@ mod tests {
                 Ok(Some(Ok(msg))) => msg,
                 _ => return None, // timeout, stream end, or frame error
             };
-            match msg {
-                WsMessage::Binary(bytes) => {
-                    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else { continue };
-                    if v["payload"]["data"]["status"].as_str() == Some("ping") {
-                        continue;
-                    }
-                    if pred(&v) {
-                        return Some(v);
-                    }
+            if let WsMessage::Binary(bytes) = msg {
+                let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else { continue };
+                if v["payload"]["data"]["status"].as_str() == Some("ping") {
+                    continue;
                 }
-                _ => {} // ignore text/pong/close frames
+                if pred(&v) {
+                    return Some(v);
+                }
             }
+            // ignore text/pong/close frames
         }
     }
 
@@ -811,7 +800,7 @@ mod tests {
             }
         });
         client
-            .send(WsMessage::Binary(serde_json::to_vec(&reply).unwrap().into()))
+            .send(WsMessage::Binary(serde_json::to_vec(&reply).unwrap()))
             .await
             .unwrap();
 
@@ -897,7 +886,7 @@ mod tests {
             }
         });
         target
-            .send(WsMessage::Binary(serde_json::to_vec(&reply).unwrap().into()))
+            .send(WsMessage::Binary(serde_json::to_vec(&reply).unwrap()))
             .await
             .unwrap();
 
@@ -923,7 +912,7 @@ mod tests {
         // Text frame → dropped (no response carrying this request id arrives).
         let text_req = serde_json::json!({ "id": "req-text-1", "type": "OBSERVE", "payload": observe });
         client
-            .send(WsMessage::Text(serde_json::to_string(&text_req).unwrap().into()))
+            .send(WsMessage::Text(serde_json::to_string(&text_req).unwrap()))
             .await
             .unwrap();
         let resp = read_until(&mut client, std::time::Duration::from_millis(500), |v| v["payload"]["request_id"] == "req-text-1").await;
@@ -932,7 +921,7 @@ mod tests {
         // Binary frame → handled (response carrying this request id arrives).
         let bin_req = serde_json::json!({ "id": "req-bin-1", "type": "OBSERVE", "payload": observe });
         client
-            .send(WsMessage::Binary(serde_json::to_vec(&bin_req).unwrap().into()))
+            .send(WsMessage::Binary(serde_json::to_vec(&bin_req).unwrap()))
             .await
             .unwrap();
         let frame = read_until(&mut client, std::time::Duration::from_secs(5), |v| v["payload"]["request_id"] == "req-bin-1")
@@ -976,7 +965,7 @@ mod tests {
             }
         });
         client
-            .send(WsMessage::Binary(serde_json::to_vec(&reply).unwrap().into()))
+            .send(WsMessage::Binary(serde_json::to_vec(&reply).unwrap()))
             .await
             .unwrap();
 
@@ -1031,7 +1020,7 @@ mod tests {
             }
         });
         client
-            .send(WsMessage::Binary(serde_json::to_vec(&reply).unwrap().into()))
+            .send(WsMessage::Binary(serde_json::to_vec(&reply).unwrap()))
             .await
             .unwrap();
 
