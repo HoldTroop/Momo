@@ -86,11 +86,53 @@ jobs:
         working-directory: bridge
         run: cargo build --release
 
-      - name: Sign macOS binary (ad-hoc)
+      - name: Import Developer ID Certificate
+        if: secrets.DEVELOPER_ID_CERTIFICATE_BASE64 != ''
+        env:
+          DEVELOPER_ID_CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$DEVELOPER_ID_CERTIFICATE_BASE64" | base64 --decode > certificate.p12
+          security create-keychain -p actions build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p actions build.keychain
+          security import certificate.p12 -k build.keychain -P "$DEVELOPER_ID_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions build.keychain
+          rm certificate.p12
+
+      - name: Sign macOS binary
+        working-directory: bridge
+        env:
+          DEVELOPER_ID_APPLICATION: ${{ secrets.DEVELOPER_ID_APPLICATION }}
+        run: |
+          if [ -n "$DEVELOPER_ID_APPLICATION" ]; then
+            codesign --sign "$DEVELOPER_ID_APPLICATION" --timestamp --options runtime --force --deep target/release/agent-bridge
+          else
+            echo "No Developer ID found, using ad-hoc signing"
+            codesign --sign - --force --deep target/release/agent-bridge
+          fi
+          codesign --verify --verbose target/release/agent-bridge
+
+      - name: Create notarization archive
+        if: secrets.APPLE_ID != ''
         working-directory: bridge
         run: |
-          codesign --sign - --force --deep target/release/agent-bridge
-          codesign --verify --verbose target/release/agent-bridge
+          mkdir -p notarize
+          cp target/release/agent-bridge notarize/
+          ditto -c -k --keepParent notarize/agent-bridge agent-bridge.zip
+
+      - name: Notarize binary
+        if: secrets.APPLE_ID != ''
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        working-directory: bridge
+        run: |
+          xcrun notarytool submit agent-bridge.zip --apple-id "$APPLE_ID" --password "$APPLE_ID_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple notarize/agent-bridge
+          cp notarize/agent-bridge target/release/agent-bridge
+          rm -rf notarize agent-bridge.zip
 
       - name: Create archive
         working-directory: bridge
