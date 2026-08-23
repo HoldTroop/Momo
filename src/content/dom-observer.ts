@@ -12,6 +12,22 @@ interface DomChange {
   timestamp: number;
 }
 
+type ObserverMessage =
+  | { type: 'GET_RECENT_CHANGES' }
+  | { type: 'REGISTER_CHANGE_CALLBACK' }
+  | { type: 'UNREGISTER_CHANGE_CALLBACK' };
+
+type ObserverResponse =
+  | { changes: DomChange[] }
+  | { callbackId: string }
+  | { success: boolean };
+
+declare global {
+  interface Window {
+    __domObserver?: DomObserver;
+  }
+}
+
 class DomObserver {
   private observer: MutationObserver | null = null;
   private changeBuffer: DomChange[] = [];
@@ -130,7 +146,7 @@ class DomObserver {
     }).catch((err) => console.warn('[Momo] Handled error:', err)); // SW may not be ready yet
   }
 
-  private handleMessage(message: any, sender: chrome.runtime.MessageSender, sendResponse: (response: any) => void) {
+  private handleMessage(message: ObserverMessage, sender: chrome.runtime.MessageSender, sendResponse: (response: ObserverResponse) => void) {
     switch (message.type) {
       case 'GET_RECENT_CHANGES':
         sendResponse({ changes: this.changeBuffer.slice(-50) });
@@ -171,4 +187,4 @@ class DomObserver {
 const domObserver = new DomObserver();
 
 // Export for debugging
-(window as any).__domObserver = domObserver;
+window.__domObserver = domObserver;
