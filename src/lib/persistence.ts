@@ -87,6 +87,7 @@ interface AgentDB extends Dexie {
 class PersistenceManager {
   private db: AgentDB | null = null;
   private initialized = false;
+  private initPromise: Promise<void> | null = null;
   /**
    * Sessions deleted this service-worker lifetime. Guards against the race where
    * a saveSession() that was already in flight (or issued just after) re-inserts
@@ -98,18 +99,35 @@ class PersistenceManager {
   async init(): Promise<void> {
     if (this.initialized) return;
 
+    // Single-flight: if init is already in progress, await the existing promise
+    if (this.initPromise) {
+      return this.initPromise;
+    }
+
+    // Start initialization and store the promise
+    this.initPromise = this._doInit();
+    try {
+      await this.initPromise;
+    } finally {
+      // Clear the promise on both success and failure so retries can re-attempt
+      this.initPromise = null;
+    }
+  }
+
+  private async _doInit(): Promise<void> {
     // Dynamic import Dexie
     const { default: Dexie } = await import('dexie');
-    this.db = new Dexie('AgentDB') as AgentDB;
+    const db = new Dexie('AgentDB') as AgentDB;
+    this.db = db;
 
-    this.getDb().version(1).stores({
+    db.version(1).stores({
       sessions: 'sessionId, updatedAt',
       wal: '++id, sessionId, timestamp',
       checkpoints: 'sessionId, stepIndex, timestamp',
       tasks: 'id, sessionId, status, deadline, priority',
     });
 
-    this.getDb().version(2).stores({
+    db.version(2).stores({
       sessions: 'sessionId, updatedAt',
       wal: '++id, sessionId, timestamp',
       checkpoints: 'sessionId, stepIndex, timestamp',
@@ -120,7 +138,7 @@ class PersistenceManager {
       await trans.table('domCache').clear();
     });
 
-    this.getDb().version(3).stores({
+    db.version(3).stores({
       checkpoints: '++id, sessionId, stepIndex, timestamp',
     }).upgrade(async (trans: Transaction) => {
       // v2 keyed checkpoints by `sessionId` (the primary key), so each session
@@ -131,11 +149,13 @@ class PersistenceManager {
       await trans.table('checkpoints').clear();
     });
 
-    this.getDb().version(4).stores({
+    db.version(4).stores({
       sessionWorking: '&sessionId, updatedAt',
     });
 
-    await this.getDb().open();
+    await db.open();
+    // Only mark initialized AFTER open() succeeds — if open() throws,
+    // this.initialized stays false and this.db stays valid (but unopened)
     this.initialized = true;
     if (import.meta.env.DEV) {
       console.log('[Persistence] Initialized');
