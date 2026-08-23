@@ -1,4 +1,5 @@
 import { MessageRouter } from './message-router.js';
+import { AgentOrchestrator } from './orchestrator.js';
 
 interface PortConnection {
   port: chrome.runtime.Port;
@@ -9,12 +10,12 @@ interface PortConnection {
 }
 
 export class PortManager {
-  private orchestrator: any;
+  private orchestrator: AgentOrchestrator;
   private messageRouter: MessageRouter;
   private connections: Map<string, PortConnection> = new Map();
   private connectionIdCounter = 0;
 
-  constructor(orchestrator: any, messageRouter: MessageRouter) {
+  constructor(orchestrator: AgentOrchestrator, messageRouter: MessageRouter) {
     this.orchestrator = orchestrator;
     this.messageRouter = messageRouter;
   }
