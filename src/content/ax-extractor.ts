@@ -25,6 +25,58 @@ interface AxTree {
   nodes: AxNode[];
 }
 
+// Message types for runtime communication
+interface GetAxTreeMessage {
+  type: 'GET_AX_TREE';
+}
+
+interface CdpAttachedMessage {
+  type: 'CDP_ATTACHED';
+  payload?: {
+    sessionId: string;
+  };
+}
+
+interface CdpDetachedMessage {
+  type: 'CDP_DETACHED';
+}
+
+type ExtractorMessage = GetAxTreeMessage | CdpAttachedMessage | CdpDetachedMessage;
+
+interface GetAxTreeResponse {
+  axTree: AxTree | null;
+}
+
+interface CdpResponse {
+  success: boolean;
+}
+
+type ExtractorResponse = GetAxTreeResponse | CdpResponse;
+
+// CDP (Chrome DevTools Protocol) types
+interface CdpAxProperty {
+  name: string;
+  value?: {
+    type?: string;
+    value?: unknown;
+  };
+}
+
+interface CdpAxNode {
+  nodeId: number;
+  role?: { value: string };
+  name?: { value: string };
+  value?: { value: string };
+  description?: { value: string };
+  properties?: CdpAxProperty[];
+  childIds?: number[];
+  backendDOMNodeId: number;
+}
+
+interface CdpAxTree {
+  nodes?: CdpAxNode[];
+}
+
 // --- Fallback AX-tree helpers (isolated world) --------------------------------
 // These run directly in the content script's ISOLATED world, which shares the
 // page's DOM but not its JS `window`. They used to be serialized into an
@@ -124,7 +176,7 @@ class AxTreeExtractor {
     }
   }
 
-  private handleMessage(message: any, sender: chrome.runtime.MessageSender, sendResponse: (response: any) => void) {
+  private handleMessage(message: ExtractorMessage, sender: chrome.runtime.MessageSender, sendResponse: (response: ExtractorResponse) => void) {
     switch (message.type) {
       case 'GET_AX_TREE':
         this.getAxTree().then(tree => sendResponse({ axTree: tree }));
@@ -199,7 +251,7 @@ class AxTreeExtractor {
     return Promise.resolve({ nodes });
   }
 
-  private convertCdpAxTree(cdpTree: any): AxTree {
+  private convertCdpAxTree(cdpTree: CdpAxTree): AxTree {
     // Convert CDP accessibility tree format to our internal format. A CDP AXNode
     // is { nodeId, role: {value}, name: {value}, value: {value}, description:
     // {value}, properties: AXProperty[], childIds: AXNodeId[], backendDOMNodeId };
@@ -210,7 +262,7 @@ class AxTreeExtractor {
     }
 
     return {
-      nodes: (cdpTree.nodes || []).map((node: any) => {
+      nodes: (cdpTree.nodes || []).map((node: CdpAxNode) => {
         const states: string[] = [];
         const attributes: Record<string, string> = {};
         for (const p of (node.properties || [])) {
@@ -237,7 +289,7 @@ class AxTreeExtractor {
     };
   }
 
-  private async sendCdpCommand(domain: string, command: string, params: any): Promise<any> {
+  private async sendCdpCommand(domain: string, command: string, params: Record<string, unknown>): Promise<CdpAxTree> {
     return new Promise((resolve, reject) => {
       chrome.runtime.sendMessage({
         type: 'CDP_COMMAND',
