@@ -270,7 +270,7 @@ class AxTreeExtractor {
             states.push(p.name.toLowerCase());
             if (p.name === 'hidden') states.push('invisible');
           }
-          if (p.value?.type === 'string') {
+          if (p.value?.type === 'string' && typeof p.value.value === 'string') {
             attributes[p.name] = p.value.value;
           }
         }
