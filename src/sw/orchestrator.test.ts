@@ -88,7 +88,7 @@ describe('AgentOrchestrator State Machine', () => {
     };
 
     vi.mocked(PersistenceManager).mockImplementation(() => mockPersistence);
-    orchestrator = new AgentOrchestrator(mockPersistence);
+    orchestrator = new AgentOrchestrator(mockPersistence as unknown as PersistenceManager);
   });
 
   afterEach(() => {
