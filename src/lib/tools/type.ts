@@ -14,6 +14,7 @@ export const typeTool: ToolDefinition = {
       text: { type: 'string', description: 'Text to type' },
       clearFirst: { type: 'boolean', default: true },
       pressEnter: { type: 'boolean', default: false },
+      keys: { type: 'array', items: { type: 'string' }, description: 'Keyboard shortcuts to press after typing (e.g., ["Ctrl+C", "Ctrl+V", "Enter"])' },
       ref_id: { type: 'string', description: 'Stable ref_id from perception for targeting' },
     },
     required: ['selector', 'text'],
@@ -31,6 +32,7 @@ export const typeTool: ToolDefinition = {
     const text = args.text as string;
     const clearFirst = args.clearFirst as boolean ?? true;
     const pressEnter = args.pressEnter as boolean ?? false;
+    const keys = args.keys as string[] | undefined;
     const refId = args.ref_id as string | undefined;
     const origin = originOf(context.dom.url);
 
@@ -202,10 +204,21 @@ export const typeTool: ToolDefinition = {
       // Trusted typing via CDP Input.insertText, not el.value += / synthetic
       // KeyboardEvent (MOMO-080/083).
       await cdpAdapter.insertText(sessionId, text);
+
+      // Handle keyboard shortcuts - support both legacy pressEnter and new keys array
+      const keysToPress: string[] = [];
       if (pressEnter) {
-        await cdpAdapter.dispatchKeyEvent(sessionId, 'Enter', 'keyDown');
-        await cdpAdapter.dispatchKeyEvent(sessionId, 'Enter', 'keyUp');
+        keysToPress.push('Enter');
       }
+      if (keys && keys.length > 0) {
+        keysToPress.push(...keys);
+      }
+
+      // Dispatch each key/combination
+      for (const keyCombo of keysToPress) {
+        await dispatchKeyCombo(sessionId, keyCombo);
+      }
+
       await reportActionResult(context.sessionId, actionHash, true);
       // Never echo the typed text into the summary (it flows into history/persistence).
       return { success: true, summary: `Typed into ${selector}`, navigationOccurred: false };
@@ -215,3 +228,38 @@ export const typeTool: ToolDefinition = {
     }
   },
 };
+
+/**
+ * Parse and dispatch a keyboard combination (e.g., "Ctrl+C", "Enter", "Shift+Tab")
+ */
+async function dispatchKeyCombo(sessionId: string, combo: string): Promise<void> {
+  const parts = combo.split('+').map(p => p.trim());
+
+  // Build modifier mask: Alt=1, Ctrl=2, Meta/Cmd=4, Shift=8
+  let modifiers = 0;
+  let key = '';
+
+  for (const part of parts) {
+    const lower = part.toLowerCase();
+    if (lower === 'ctrl' || lower === 'control') {
+      modifiers |= 2;
+    } else if (lower === 'shift') {
+      modifiers |= 8;
+    } else if (lower === 'alt') {
+      modifiers |= 1;
+    } else if (lower === 'meta' || lower === 'cmd' || lower === 'command') {
+      modifiers |= 4;
+    } else {
+      // This is the actual key
+      key = part;
+    }
+  }
+
+  if (!key) {
+    throw new Error(`Invalid key combination: ${combo}`);
+  }
+
+  // Dispatch keyDown and keyUp events
+  await cdpAdapter.dispatchKeyEvent(sessionId, key, 'keyDown', modifiers > 0 ? modifiers : undefined);
+  await cdpAdapter.dispatchKeyEvent(sessionId, key, 'keyUp', modifiers > 0 ? modifiers : undefined);
+}
