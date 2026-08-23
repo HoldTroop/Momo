@@ -102,14 +102,14 @@ class PersistenceManager {
     const { default: Dexie } = await import('dexie');
     this.db = new Dexie('AgentDB') as AgentDB;
 
-    this.db.version(1).stores({
+    this.getDb().version(1).stores({
       sessions: 'sessionId, updatedAt',
       wal: '++id, sessionId, timestamp',
       checkpoints: 'sessionId, stepIndex, timestamp',
       tasks: 'id, sessionId, status, deadline, priority',
     });
 
-    this.db.version(2).stores({
+    this.getDb().version(2).stores({
       sessions: 'sessionId, updatedAt',
       wal: '++id, sessionId, timestamp',
       checkpoints: 'sessionId, stepIndex, timestamp',
@@ -120,7 +120,7 @@ class PersistenceManager {
       await trans.table('domCache').clear();
     });
 
-    this.db.version(3).stores({
+    this.getDb().version(3).stores({
       checkpoints: '++id, sessionId, stepIndex, timestamp',
     }).upgrade(async (trans: Transaction) => {
       // v2 keyed checkpoints by `sessionId` (the primary key), so each session
@@ -131,22 +131,29 @@ class PersistenceManager {
       await trans.table('checkpoints').clear();
     });
 
-    this.db.version(4).stores({
+    this.getDb().version(4).stores({
       sessionWorking: '&sessionId, updatedAt',
     });
 
-    await this.db.open();
+    await this.getDb().open();
     this.initialized = true;
     if (import.meta.env.DEV) {
       console.log('[Persistence] Initialized');
     }
   }
 
+  private getDb(): AgentDB {
+    if (!this.db) {
+      throw new Error('[Persistence] Database not initialized');
+    }
+    return this.db;
+  }
+
   async saveSession(sessionId: string, state: AgentState): Promise<void> {
     if (!this.initialized) await this.init();
     if (this.deletedSessions.has(sessionId)) return;
 
-    const existing = await this.db.sessions.get(sessionId);
+    const existing = await this.getDb().sessions.get(sessionId);
     const record: SessionRecord = {
       sessionId,
       state: this.serializeState(this.redactStateForPersistence(state)),
@@ -154,20 +161,20 @@ class PersistenceManager {
       updatedAt: Date.now(),
     };
 
-    await this.db.sessions.put(record);
+    await this.getDb().sessions.put(record);
   }
 
   async getSession(sessionId: string): Promise<AgentState | null> {
     if (!this.initialized) await this.init();
 
-    const record = await this.db.sessions.get(sessionId);
+    const record = await this.getDb().sessions.get(sessionId);
     return record ? this.deserializeState(record.state) : null;
   }
 
   async getAllSessions(): Promise<Array<{ state: AgentState; createdAt: number; updatedAt: number }>> {
     if (!this.initialized) await this.init();
 
-    const records = await this.db.sessions.orderBy('updatedAt').reverse().toArray();
+    const records = await this.getDb().sessions.orderBy('updatedAt').reverse().toArray();
     return records.map((r: SessionRecord) => ({
       state: this.deserializeState(r.state),
       createdAt: r.createdAt,
@@ -182,12 +189,13 @@ class PersistenceManager {
     // (which may still be issuing its put) skips the re-insert (MOMO-114).
     this.deletedSessions.add(sessionId);
 
-    await this.db.transaction('rw', this.db.sessions, this.db.wal, this.db.checkpoints, this.db.tasks, this.db.sessionWorking, async () => {
-      await this.db.sessions.delete(sessionId);
-      await this.db.wal.where('sessionId').equals(sessionId).delete();
-      await this.db.checkpoints.where('sessionId').equals(sessionId).delete();
-      await this.db.tasks.where('sessionId').equals(sessionId).delete();
-      await this.db.sessionWorking.delete(sessionId);
+    const db = this.getDb();
+    await db.transaction('rw', db.sessions, db.wal, db.checkpoints, db.tasks, db.sessionWorking, async () => {
+      await db.sessions.delete(sessionId);
+      await db.wal.where('sessionId').equals(sessionId).delete();
+      await db.checkpoints.where('sessionId').equals(sessionId).delete();
+      await db.tasks.where('sessionId').equals(sessionId).delete();
+      await db.sessionWorking.delete(sessionId);
     });
   }
 
@@ -195,7 +203,7 @@ class PersistenceManager {
     if (!this.initialized) await this.init();
 
     const sanitized = this.sanitizeForSerialization(state);
-    await this.db.sessionWorking.put({
+    await this.getDb().sessionWorking.put({
       sessionId,
       state: SuperJSON.serialize(sanitized),
       updatedAt: Date.now(),
@@ -205,7 +213,7 @@ class PersistenceManager {
   async loadSessionWorkingCopy(sessionId: string): Promise<unknown | null> {
     if (!this.initialized) await this.init();
 
-    const row = await this.db.sessionWorking.get(sessionId);
+    const row = await this.getDb().sessionWorking.get(sessionId);
     if (!row) return null;
     try {
       return SuperJSON.deserialize(row.state);
@@ -225,14 +233,14 @@ class PersistenceManager {
       data: SuperJSON.serialize(redactValue(entry.data)),
     };
 
-    const id = await this.db.wal.add(record);
+    const id = await this.getDb().wal.add(record as WalRecord);
     return id;
   }
 
   async getWalEntries(sessionId: string, afterPosition: number): Promise<WalEntry[]> {
     if (!this.initialized) await this.init();
 
-    const records = await this.db.wal
+    const records = await this.getDb().wal
       .where('sessionId').equals(sessionId)
       .and((r: WalRecord) => r.id > afterPosition)
       .toArray();
@@ -258,7 +266,7 @@ class PersistenceManager {
     if (!this.initialized) await this.init();
     // The WAL position is the highest auto-increment id actually persisted, not
     // an in-memory counter that resets on service-worker restart (MOMO-116).
-    const last = await this.db.wal.orderBy('id').last();
+    const last = await this.getDb().wal.orderBy('id').last();
     return last?.id ?? 0;
   }
 
@@ -273,20 +281,20 @@ class PersistenceManager {
       timestamp: checkpoint.timestamp,
     };
 
-    await this.db.checkpoints.put(record);
+    await this.getDb().checkpoints.put(record);
   }
 
   async getLatestCheckpoint(sessionId: string): Promise<Checkpoint | null> {
     if (!this.initialized) await this.init();
 
-    const record = await this.db.checkpoints
+    const record = await this.getDb().checkpoints
       .where('sessionId').equals(sessionId)
       .sortBy('timestamp')
       .then((arr: CheckpointRecord[]) => arr[arr.length - 1] || null);
 
     return record ? {
       stepIndex: record.stepIndex,
-      stateSnapshot: SuperJSON.deserialize(record.stateSnapshot),
+      stateSnapshot: SuperJSON.deserialize(record.stateSnapshot as SuperJSONResult),
       walPosition: record.walPosition,
       timestamp: record.timestamp,
     } : null;
@@ -309,13 +317,13 @@ class PersistenceManager {
       updatedAt: Date.now(),
     };
 
-    await this.db.tasks.put(record);
+    await this.getDb().tasks.put(record);
   }
 
   async updateTask(id: string, updates: Partial<TaskRecord>): Promise<void> {
     if (!this.initialized) await this.init();
 
-    await this.db.tasks.update(id, { ...updates, updatedAt: Date.now() });
+    await this.getDb().tasks.update(id, { ...updates, updatedAt: Date.now() });
   }
 
   async getNextPendingTask(sessionId: string): Promise<TaskQueueEntry | null> {
@@ -323,7 +331,7 @@ class PersistenceManager {
 
     // Filter in-memory, then sort once by descending priority (sortBy is always
     // ascending, so a preceding .sortBy('priority') was a wasted pass — MOMO-115).
-    const pending: TaskRecord[] = await this.db.tasks
+    const pending: TaskRecord[] = await this.getDb().tasks
       .where('sessionId').equals(sessionId)
       .and((r: TaskRecord) => r.status === 'pending' && r.deadline > Date.now())
       .toArray();
@@ -336,7 +344,7 @@ class PersistenceManager {
   async sweepExpiredPendingTasks(sessionId: string, now: number = Date.now()): Promise<number> {
     if (!this.initialized) await this.init();
 
-    return this.db.tasks
+    return this.getDb().tasks
       .where('sessionId').equals(sessionId)
       .filter((r: TaskRecord) => r.status === 'pending' && r.deadline <= now)
       .modify((r: TaskRecord) => {
@@ -347,7 +355,7 @@ class PersistenceManager {
   async getTasksByStatus(sessionId: string, status: TaskStatus): Promise<TaskQueueEntry[]> {
     if (!this.initialized) await this.init();
 
-    const records = await this.db.tasks
+    const records = await this.getDb().tasks
       .where('sessionId').equals(sessionId)
       .and((r: TaskRecord) => r.status === status)
       .toArray();
@@ -359,7 +367,7 @@ class PersistenceManager {
   async requeueStaleRunningTasks(sessionId: string, staleBeforeMs: number): Promise<number> {
     if (!this.initialized) await this.init();
 
-    return this.db.tasks
+    return this.getDb().tasks
       .where('sessionId').equals(sessionId)
       .filter((r: TaskRecord) => r.status === 'running' && r.updatedAt < staleBeforeMs)
       .modify((r: TaskRecord) => {
@@ -370,13 +378,13 @@ class PersistenceManager {
   async saveDomCache(url: string, compressedDom: CompressedDom): Promise<void> {
     if (!this.initialized) await this.init();
 
-    await this.db!.domCache.put({ url, data: this.redactCompressedDom(compressedDom), timestamp: Date.now() });
+    await this.getDb().domCache.put({ url, data: this.redactCompressedDom(compressedDom), timestamp: Date.now() });
   }
 
   async getDomCache(url: string): Promise<CompressedDom | null> {
     if (!this.initialized) await this.init();
 
-    const record = await this.db!.domCache.get(url);
+    const record = await this.getDb().domCache.get(url);
     return record?.data || null;
   }
 
@@ -392,7 +400,7 @@ class PersistenceManager {
 
   async close(): Promise<void> {
     if (this.db) {
-      await this.db.close();
+      await this.getDb().close();
       this.initialized = false;
     }
   }
