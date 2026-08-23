@@ -166,20 +166,26 @@ function App() {
     switch (msg.type) {
       case 'STATE_UPDATE':
         if (msg.payload?.state) {
-          setAgentState(prev => ({ ...prev, ...msg.payload.state, isRunning: msg.payload.state.isRunning ?? prev.isRunning }));
+          const state = msg.payload.state;
+          setAgentState(prev => ({ ...prev, ...state, isRunning: state.isRunning ?? prev.isRunning }));
         }
         break;
       case 'TASK_STARTED':
+        if (!msg.payload) break;
         setIsLoading(false);
         addMessage({ role: 'agent', content: `▶ Task started: ${msg.payload.goal}` });
         break;
       case 'PLAN_CREATED':
-        setAgentState(prev => ({ ...prev, plan: msg.payload.plan, currentStep: 0 }));
+        if (!msg.payload) break;
+        setAgentState(prev => ({ ...prev, plan: msg.payload!.plan ?? null, currentStep: 0 }));
         break;
       case 'STEP_STARTED':
+        if (!msg.payload) break;
         setIsLoading(false);
-        setAgentState(prev => ({ ...prev, currentStep: msg.payload.stepIndex }));
-        addMessage({ role: 'agent', content: `Step ${msg.payload.stepIndex + 1}: ${msg.payload.action.name}`, toolCalls: [msg.payload.action] });
+        setAgentState(prev => ({ ...prev, currentStep: msg.payload!.stepIndex ?? 0 }));
+        if (msg.payload!.stepIndex !== undefined && msg.payload!.action) {
+          addMessage({ role: 'agent', content: `Step ${msg.payload!.stepIndex + 1}: ${msg.payload!.action.name}`, toolCalls: [msg.payload!.action] });
+        }
         break;
       case 'STEP_COMPLETED':
         if (msg.payload?.result) {
@@ -192,24 +198,27 @@ function App() {
         loadSessions();
         break;
       case 'TASK_ABORTED':
+        if (!msg.payload) break;
         addMessage({ role: 'agent', content: `❌ Task aborted: ${msg.payload.reason}` });
         setIsLoading(false);
         break;
       case 'HUMAN_INTERVENTION_REQUIRED':
+        if (!msg.payload) break;
         setHumanIntervention({
-          stepId: msg.payload.stepId,
-          question: msg.payload.error || `Step ${msg.payload.stepId} requires confirmation`,
-          actionHash: msg.payload.actionHash,
-          pageRevision: msg.payload.pageRevision,
-          origin: msg.payload.origin,
-          action: msg.payload.action,
-          target: msg.payload.target,
-          reversible: msg.payload.reversible,
-          riskClass: msg.payload.riskClass,
+          stepId: msg.payload!.stepId ?? '',
+          question: msg.payload!.error || `Step ${msg.payload!.stepId} requires confirmation`,
+          actionHash: msg.payload!.actionHash ?? '',
+          pageRevision: msg.payload!.pageRevision ?? 0,
+          origin: msg.payload!.origin ?? '',
+          action: typeof msg.payload!.action === 'string' ? msg.payload!.action : (msg.payload!.action as any)?.name ?? '',
+          target: msg.payload!.target ?? '',
+          reversible: msg.payload!.reversible ?? false,
+          riskClass: msg.payload!.riskClass ?? '',
         });
         break;
       case 'LLM_STREAM_CHUNK':
-        appendToStream(msg.payload.content);
+        if (!msg.payload) break;
+        appendToStream(msg.payload!.content ?? '');
         break;
       case 'BRIDGE_EVENT':
         if (msg.payload?.event === 'llm_stream_chunk') {
@@ -404,13 +413,16 @@ function App() {
                   <div className="args">{JSON.stringify(tc.arguments, null, 2)}</div>
                 </div>
               ))}
-              {msg.toolResults?.map((tr, i) => (
-                <div key={i} className={`tool-result ${tr.success ? '' : 'error'}`}>
-                  <div>{tr.success ? '✅' : '❌'} {tr.summary}</div>
-                  {tr.data && <pre>{JSON.stringify(tr.data, null, 2)}</pre>}
-                  {tr.error && <div style={{ color: '#f85149' }}>{tr.error}</div>}
-                </div>
-              ))}
+              {msg.toolResults?.map((tr, i) => {
+                const dataStr = tr.data ? String(JSON.stringify(tr.data, null, 2)) : null;
+                return (
+                  <div key={i} className={`tool-result ${tr.success ? '' : 'error'}`}>
+                    <div>{tr.success ? '✅' : '❌'} {tr.summary}</div>
+                    {dataStr && <pre>{dataStr}</pre>}
+                    {tr.error && <div style={{ color: '#f85149' }}>{tr.error}</div>}
+                  </div>
+                );
+              })}
             </div>
           </div>
         ))}
