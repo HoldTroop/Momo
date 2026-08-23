@@ -279,10 +279,14 @@ Edit the policy configuration via the bridge's `POLICY_SET_CONFIG` request or di
 
 ```json
 {
-  "origin_allowlist": ["example.com", "*.google.com"],
+  "allowlist": ["example.com", "*.google.com"],
   "permitted_actions": ["click", "type", "navigate", "scroll"],
-  "confirmation_policy": "Moderate",
-  "token_budget_per_task": 200000
+  "confirmation_policy": "sensitive",
+  "token_budget": {
+    "max_tokens": 200000,
+    "warning_threshold": 0.8,
+    "reset_interval_hours": 24
+  }
 }
 ```
 
@@ -407,9 +411,9 @@ If recovery fails after multiple attempts, the task is paused and you're notifie
 
 **Solutions:**
 
-1. **Check your origin allowlist:**
+1. **Check your allowlist:**
    ```bash
-   sqlite3 ~/.momo/policy.db "SELECT value FROM config WHERE key='origin_allowlist';"
+   sqlite3 ~/.momo/policy.db "SELECT value FROM config WHERE key='allowlist';"
    ```
 
 2. **Verify the target domain is included:**
@@ -428,16 +432,20 @@ If recovery fails after multiple attempts, the task is paused and you're notifie
 
 5. **Check token budget:**
    ```bash
-   sqlite3 ~/.momo/policy.db "SELECT value FROM config WHERE key='token_budget_per_task';"
+   sqlite3 ~/.momo/policy.db "SELECT value FROM config WHERE key='token_budget';"
    ```
 
 6. **Test with permissive policy first:**
    ```json
    {
-     "origin_allowlist": ["*"],
+     "allowlist": ["*"],
      "permitted_actions": ["click", "type", "navigate", "scroll"],
-     "confirmation_policy": "Low",
-     "token_budget_per_task": 500000
+     "confirmation_policy": "never",
+     "token_budget": {
+       "max_tokens": 500000,
+       "warning_threshold": 0.8,
+       "reset_interval_hours": 24
+     }
    }
    ```
    **Warning:** Only use permissive policies in development/testing environments.

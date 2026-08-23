@@ -97,7 +97,7 @@ Get Momo running in 5 minutes.
 
 **Policy-Governed Security**
 - Origin allowlists with subdomain-bounded matching (fail-closed by default)
-- Risk classification (Sensitive/Moderate/Low) with confirmation gates
+- Risk classification (Read/Write/Navigation/Payment/Auth/Dangerous) with confirmation gates
 - SQLite-backed audit log tracking every action and authorization decision
 - Token budget enforcement preventing runaway execution
 
