@@ -145,13 +145,15 @@ export const clickTool: ToolDefinition = {
                 const node = snapshot.snapshotItem(i);
                 if (node) candidates.push(node as Element);
               }
-            } catch {
+            } catch (e) {
+              console.error('[Momo System Error]:', e);
               return { success: false, error: 'Invalid XPath' };
             }
           } else {
             try {
               candidates = Array.from(document.querySelectorAll(sel));
-            } catch {
+            } catch (e) {
+              console.error('[Momo System Error]:', e);
               return { success: false, error: 'Invalid selector' };
             }
           }

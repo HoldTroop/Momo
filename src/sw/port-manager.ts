@@ -104,7 +104,8 @@ export class PortManager {
       if (!filter || filter(connection)) {
         try {
           connection.port.postMessage(message);
-        } catch {
+        } catch (e) {
+          console.error('[Momo System Error]:', e);
           // Port might be closed
         }
       }

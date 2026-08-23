@@ -261,23 +261,44 @@ Default policy (fail-closed):
 
 ```json
 {
-  "origin_allowlist": [],
+  "allowlist": [],
   "permitted_actions": [],
-  "confirmation_policy": "Sensitive",
-  "token_budget_per_task": 100000
+  "confirmation_policy": "sensitive",
+  "data_retention": "session",
+  "token_budget": {
+    "max_tokens": 100000,
+    "warning_threshold": 0.8,
+    "reset_interval_hours": 24
+  },
+  "risk_thresholds": {
+    "read": 1000,
+    "write": 500,
+    "navigation": 100,
+    "payment": 10,
+    "auth": 10,
+    "dangerous": 1
+  }
 }
 ```
+
+**Note**: `risk_thresholds` and `data_retention` are saved to the database but not yet enforced. Risk classification is keyword-based (see `policy.rs:405-429`). Token budget enforcement uses `max_tokens` (hard limit) and `warning_threshold` (emits warnings at the specified ratio, e.g., 0.8 = 80%).
 
 To allow specific origins:
 
 ```json
 {
-  "origin_allowlist": ["example.com", "*.google.com"],
+  "allowlist": ["example.com", "*.google.com"],
   "permitted_actions": ["click", "type", "navigate", "scroll"],
-  "confirmation_policy": "Moderate",
-  "token_budget_per_task": 200000
+  "confirmation_policy": "sensitive",
+  "token_budget": {
+    "max_tokens": 200000,
+    "warning_threshold": 0.8,
+    "reset_interval_hours": 24
+  }
 }
 ```
+
+**Valid `confirmation_policy` values**: `"always"`, `"sensitive"`, `"never"` (lowercase only)
 
 ---
 
@@ -656,16 +677,20 @@ curl -i -N -H "Connection: Upgrade" -H "Upgrade: websocket" \
   ```bash
   sqlite3 ~/.momo/policy.db "SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 10;"
   ```
-- Ensure `confirmation_policy` matches your security requirements (`Low`, `Moderate`, or `Sensitive`)
-- Check token budget hasn't been exceeded: `token_budget_per_task` in policy configuration
+- Ensure `confirmation_policy` matches your security requirements (`"always"`, `"sensitive"`, or `"never"` - lowercase only)
+- Check token budget hasn't been exceeded: `token_budget.max_tokens` in policy configuration
 - For subdomain matching, use wildcard syntax: `*.example.com` (not `example.com` alone)
 - Test with permissive policy first, then tighten:
   ```json
   {
-    "origin_allowlist": ["*"],
+    "allowlist": ["*"],
     "permitted_actions": ["click", "type", "navigate", "scroll"],
-    "confirmation_policy": "Low",
-    "token_budget_per_task": 500000
+    "confirmation_policy": "never",
+    "token_budget": {
+      "max_tokens": 500000,
+      "warning_threshold": 0.8,
+      "reset_interval_hours": 24
+    }
   }
   ```
 

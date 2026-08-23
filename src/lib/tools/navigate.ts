@@ -31,7 +31,8 @@ export const navigateTool: ToolDefinition = {
     let parsedUrl: URL;
     try {
       parsedUrl = new URL(url);
-    } catch {
+    } catch (e) {
+      console.error('[Momo System Error]:', e);
       return { success: false, error: 'Invalid URL', summary: 'Navigation blocked: invalid URL', navigationOccurred: false };
     }
     if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
@@ -109,7 +110,8 @@ export const navigateTool: ToolDefinition = {
     try {
       const finalTab = await chrome.tabs.get(context.tabId);
       finalUrl = finalTab?.url || url;
-    } catch {
+    } catch (e) {
+      console.error('[Momo System Error]:', e);
       // Tab gone; fall back to the requested URL.
     }
 

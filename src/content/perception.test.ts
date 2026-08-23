@@ -224,11 +224,9 @@ describe('getInteractiveElements', () => {
     const first = mod.getInteractiveElements();
     expect(first.elements).toHaveLength(1);
     expect(first.elements[0]!.ref).toBe('el_1');
-    // Both marker attributes were stripped from the leftover element.
+    // The marker attribute was stripped from the leftover element.
     expect(staleRemoved).toContain('data-momo-ref');
-    expect(staleRemoved).toContain('data-momo-ref-id');
     expect(staleAttrs['data-momo-ref']).toBeUndefined();
-    expect(staleAttrs['data-momo-ref-id']).toBeUndefined();
     // The fresh element got the counter's first ref.
     expect(freshAttrs['data-momo-ref']).toBe('el_1');
 

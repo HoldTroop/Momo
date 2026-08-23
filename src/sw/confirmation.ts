@@ -27,7 +27,8 @@ export async function getCurrentOrigin(): Promise<string> {
     const origin = new URL(url).origin;
     // `chrome://`, `about:blank`, etc. report origin `'null'` — treat as unknown.
     return origin && origin !== 'null' ? origin : 'unknown';
-  } catch {
+  } catch (e) {
+    console.error('[Momo System Error]:', e);
     return 'unknown';
   }
 }

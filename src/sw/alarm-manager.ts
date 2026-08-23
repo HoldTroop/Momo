@@ -90,7 +90,8 @@ export class AlarmManager {
     // MOMO-090/MOMO-120) — a fire-and-forget WS ping is the replacement.
     try {
       getWsClient().ping();
-    } catch {
+    } catch (e) {
+      console.error('[Momo System Error]:', e);
       // WS client not initialized yet (constructor order); the alarm still woke
       // the worker, which is the actual keepalive.
     }
@@ -129,7 +130,8 @@ export class AlarmManager {
     // liveness signal, not a health gate.
     try {
       getWsClient().ping();
-    } catch {
+    } catch (e) {
+      console.error('[Momo System Error]:', e);
       console.warn('[Watchdog] WebSocket client unavailable');
     }
   }

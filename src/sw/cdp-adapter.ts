@@ -276,11 +276,18 @@ class CdpAdapter {
     y: number,
     button: 'left' | 'right' | 'middle' = 'left',
     clickCount = 1,
+    abortSignal?: AbortSignal,
   ): Promise<any> {
+    if (abortSignal?.aborted) {
+      throw new Error('Operation cancelled');
+    }
     return this.sendCommand(sessionId, 'Input', 'dispatchMouseEvent', { type, x, y, button, clickCount });
   }
 
-  async insertText(sessionId: string, text: string): Promise<any> {
+  async insertText(sessionId: string, text: string, abortSignal?: AbortSignal): Promise<any> {
+    if (abortSignal?.aborted) {
+      throw new Error('Operation cancelled');
+    }
     return this.sendCommand(sessionId, 'Input', 'insertText', { text });
   }
 

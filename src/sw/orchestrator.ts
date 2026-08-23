@@ -542,7 +542,8 @@ export class AgentOrchestrator {
       let tabUrl: string | undefined;
       try {
         tabUrl = (await chrome.tabs.get(tabId)).url;
-      } catch {
+      } catch (e) {
+        console.error('[Momo System Error]:', e);
         return false;
       }
       if (!(await ensureHostPermission(tabUrl))) return false;
@@ -552,7 +553,8 @@ export class AgentOrchestrator {
         args: [selector],
       });
       return result[0]?.result === true;
-    } catch {
+    } catch (e) {
+      console.error('[Momo System Error]:', e);
       return false;
     }
   }
@@ -564,7 +566,8 @@ export class AgentOrchestrator {
       let tabUrl: string | undefined;
       try {
         tabUrl = (await chrome.tabs.get(tabId)).url;
-      } catch {
+      } catch (e) {
+        console.error('[Momo System Error]:', e);
         return false;
       }
       if (!(await ensureHostPermission(tabUrl))) return false;
@@ -574,7 +577,8 @@ export class AgentOrchestrator {
         args: [selector],
       });
       return result[0]?.result === true;
-    } catch {
+    } catch (e) {
+      console.error('[Momo System Error]:', e);
       return false;
     }
   }
@@ -586,7 +590,8 @@ export class AgentOrchestrator {
       let tabUrl: string | undefined;
       try {
         tabUrl = (await chrome.tabs.get(tabId)).url;
-      } catch {
+      } catch (e) {
+        console.error('[Momo System Error]:', e);
         return false;
       }
       if (!(await ensureHostPermission(tabUrl))) return false;
@@ -596,7 +601,8 @@ export class AgentOrchestrator {
         args: [selector, text],
       });
       return result[0]?.result === true;
-    } catch {
+    } catch (e) {
+      console.error('[Momo System Error]:', e);
       return false;
     }
   }
@@ -612,7 +618,8 @@ export class AgentOrchestrator {
     let regex: RegExp;
     try {
       regex = new RegExp(pattern);
-    } catch {
+    } catch (e) {
+      console.error('[Momo System Error]:', e);
       return false;
     }
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -834,7 +841,8 @@ export class AgentOrchestrator {
         },
       });
       axTree = results?.[0]?.result ?? null;
-    } catch {
+    } catch (e) {
+      console.error('[Momo System Error]:', e);
       axTree = null;
     }
 
@@ -842,7 +850,8 @@ export class AgentOrchestrator {
       try {
         const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_AX_TREE' }, { frameId: 0 });
         axTree = response?.axTree ?? null;
-      } catch {
+      } catch (e) {
+        console.error('[Momo System Error]:', e);
         axTree = null;
       }
     }
@@ -1009,7 +1018,8 @@ export class AgentOrchestrator {
     // is gone; state sync / liveness now rides the WebSocket client.
     try {
       getWsClient().ping();
-    } catch {
+    } catch (e) {
+      console.error('[Momo System Error]:', e);
       // WS client not yet connected; nothing to sync.
     }
   }

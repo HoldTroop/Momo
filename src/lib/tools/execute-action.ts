@@ -37,11 +37,21 @@ export const executeActionTool: ToolDefinition = {
     const text = args.text as string | undefined;
     const url = args.url as string | undefined;
 
-    // Injection defense: ref must match the el_XX format for ref-targeted
-    // actions before any content-script or bridge call is made.
-    if ((action === 'click' || action === 'scroll' || action === 'type') && ref !== undefined && !/^el_\d+$/.test(ref)) {
-      return { success: false, error: 'Invalid ref format', summary: `execute_action ${action}: invalid ref`, navigationOccurred: false };
+    // Create abort controller for this action so it can be cancelled mid-flight
+    const abortController = new AbortController();
+    const request_id = crypto.randomUUID();
+
+    // Register with message router for cancellation support
+    if (context.registerCdpOperation) {
+      context.registerCdpOperation(request_id, abortController);
     }
+
+    try {
+      // Injection defense: ref must match the el_XX format for ref-targeted
+      // actions before any content-script or bridge call is made.
+      if ((action === 'click' || action === 'scroll' || action === 'type') && ref !== undefined && !/^el_\d+$/.test(ref)) {
+        return { success: false, error: 'Invalid ref format', summary: `execute_action ${action}: invalid ref`, navigationOccurred: false };
+      }
 
     switch (action) {
       case 'navigate': {
@@ -53,7 +63,8 @@ export const executeActionTool: ToolDefinition = {
           if (u.protocol !== 'http:' && u.protocol !== 'https:') {
             return { success: false, error: 'Only http/https URLs are allowed', summary: 'execute_action navigate: only http/https URLs are allowed', navigationOccurred: false };
           }
-        } catch {
+        } catch (e) {
+          console.error('[Momo System Error]:', e);
           return { success: false, error: 'Invalid URL', summary: 'execute_action navigate: invalid URL', navigationOccurred: false };
         }
         return navigateTool.execute({ url }, context);
@@ -169,9 +180,9 @@ export const executeActionTool: ToolDefinition = {
           return { success: false, error: 'CDP session unavailable', summary: 'execute_action click: no CDP session', navigationOccurred: false };
         }
         try {
-          await cdpAdapter.dispatchMouseEvent(sessionId, 'mouseMoved', resolved.x, resolved.y);
-          await cdpAdapter.dispatchMouseEvent(sessionId, 'mousePressed', resolved.x, resolved.y);
-          await cdpAdapter.dispatchMouseEvent(sessionId, 'mouseReleased', resolved.x, resolved.y);
+          await cdpAdapter.dispatchMouseEvent(sessionId, 'mouseMoved', resolved.x, resolved.y, 'left', 1, abortController.signal);
+          await cdpAdapter.dispatchMouseEvent(sessionId, 'mousePressed', resolved.x, resolved.y, 'left', 1, abortController.signal);
+          await cdpAdapter.dispatchMouseEvent(sessionId, 'mouseReleased', resolved.x, resolved.y, 'left', 1, abortController.signal);
         } catch (e) {
           await reportActionResult(context.sessionId, actionHash, false, String(e));
           return { success: false, error: String(e), summary: 'execute_action click failed', navigationOccurred: false };
@@ -223,7 +234,7 @@ export const executeActionTool: ToolDefinition = {
           return { success: false, error: 'CDP session unavailable', summary: 'execute_action type: no CDP session', navigationOccurred: false };
         }
         try {
-          await cdpAdapter.insertText(sessionId, text);
+          await cdpAdapter.insertText(sessionId, text, abortController.signal);
         } catch (e) {
           await reportActionResult(context.sessionId, actionHash, false, String(e));
           return { success: false, error: String(e), summary: 'execute_action type failed', navigationOccurred: false };
@@ -235,5 +246,11 @@ export const executeActionTool: ToolDefinition = {
       default:
         return { success: false, error: `Unsupported action: ${action}`, summary: `Unsupported action: ${action}`, navigationOccurred: false };
     }
+  } finally {
+    // Cleanup: unregister the abort controller after the action completes
+    if (context.unregisterCdpOperation) {
+      context.unregisterCdpOperation(request_id);
+    }
+  }
   },
 };

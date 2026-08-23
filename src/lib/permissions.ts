@@ -16,7 +16,8 @@ export async function ensureHostPermission(url: string | undefined): Promise<boo
   let origin: string;
   try {
     origin = new URL(url).origin;
-  } catch {
+  } catch (e) {
+    console.error('[Momo System Error]:', e);
     return true;
   }
   if (!origin.startsWith('http://') && !origin.startsWith('https://')) return true; // extension/chrome pages: not gateable

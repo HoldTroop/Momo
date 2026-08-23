@@ -30,17 +30,23 @@ extension's JavaScript trust domain.
   `SIMULATE_CLICK` / `SIMULATE_TYPE` request over the authenticated localhost
   WebSocket (`src/sw/ws-client.ts`).
 - The Rust side evaluates each request in `PolicyEngine::evaluate`, in order:
-  1. `check_origin` — domain allowlist. An empty allowlist fails closed (deny
+  1. **`check_origin`** — domain allowlist. An empty allowlist fails closed (deny
      all). A wildcard entry (`*.example.com`) matches the apex plus subdomains
      only. `navigate` is gated on the destination URL; every other action is
      gated on the current page origin.
-  2. `check_action_permitted` — action whitelist.
-  3. `classify_risk` — derive a `RiskClass` from the action.
-  4. `check_token_budget` — enforce the per-session token budget.
-  5. `requires_confirmation` — apply `ConfirmationPolicy`
+  2. **`check_action_permitted`** — action whitelist.
+  3. **`classify_risk`** — derive a `RiskClass` from the action (keyword-based).
+  4. **`check_token_budget`** — enforce the per-session token budget under a
+     write-lock to prevent race conditions. Inside this single critical section
+     (policy.rs:358-394): reset the budget window if `reset_interval_hours` has
+     elapsed, check if `current_usage + tokens_needed > max_tokens` (deny if
+     over), emit a `tracing::warn!` if `(current_usage + tokens_needed) / max_tokens > warning_threshold`,
+     then **immediately deduct** `tokens_needed` from the budget. Token deduction
+     is NOT a separate step—it happens atomically inside step 4 so concurrent
+     evaluations cannot race the check against the write.
+  5. **`requires_confirmation`** — apply `ConfirmationPolicy`
      (`Always`/`Sensitive`/`Never`) together with sensitive-field detection
      (`is_sensitive_field`), producing a `ConfirmationData` payload when set.
-  6. `deduct_tokens` — commit the token cost.
 - `evaluate` returns `allowed: bool`, `requires_confirmation`, and `risk_class`.
   The TypeScript tool blocks on `!allowed` and, when `requires_confirmation` is
   set, surfaces a confirmation request to the side panel.

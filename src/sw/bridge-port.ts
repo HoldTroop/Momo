@@ -13,7 +13,10 @@ export async function discoverBridgeUrl(): Promise<string> {
         const body = (await response.text()).trim();
         if (body === 'ok') return `ws://127.0.0.1:${port}/ws`;
       }
-    } catch { /* port not answering; try next */ }
+    } catch (e) {
+      console.error('[Momo System Error]:', e);
+      /* port not answering; try next */
+    }
   }
   throw new Error('Could not discover bridge port in 9090-9100');
 }

@@ -26,3 +26,4 @@ tokio-tungstenite = "0.21"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+fs2 = "0.4"

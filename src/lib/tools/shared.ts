@@ -44,7 +44,8 @@ export async function reportActionResult(sessionId: string, actionHash: string |
 export function originOf(url: string): string {
   try {
     return new URL(url).origin;
-  } catch {
+  } catch (e) {
+    console.error('[Momo System Error]:', e);
     return '';
   }
 }
@@ -128,7 +129,8 @@ export async function resolveRefStrict(
       },
       args: [ref],
     });
-  } catch {
+  } catch (e) {
+    console.error('[Momo System Error]:', e);
     return { status: 'stale_reference' };
   }
   const res = probe[0]?.result as
@@ -162,7 +164,8 @@ export async function focusRefStrict(
       },
       args: [ref],
     });
-  } catch {
+  } catch (e) {
+    console.error('[Momo System Error]:', e);
     return { status: 'stale_reference' };
   }
   const res = probe[0]?.result as

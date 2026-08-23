@@ -70,3 +70,37 @@ jobs:
             momo-extension-*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-macos:
+    name: Build macOS Binary
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build macOS binary
+        working-directory: bridge
+        run: cargo build --release
+
+      - name: Sign macOS binary (ad-hoc)
+        working-directory: bridge
+        run: |
+          codesign --sign - --force --deep target/release/agent-bridge
+          codesign --verify --verbose target/release/agent-bridge
+
+      - name: Create archive
+        working-directory: bridge
+        run: |
+          tar -czf agent-bridge-macos-${GITHUB_REF_NAME}.tar.gz -C target/release agent-bridge
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: bridge/agent-bridge-macos-*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

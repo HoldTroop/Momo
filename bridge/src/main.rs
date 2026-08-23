@@ -5,20 +5,19 @@ use std::sync::Arc;
 use anyhow::Result;
 use axum::{routing::get, Router};
 use dirs;
+use fs2::FileExt;
 use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-mod llm;
 mod mcp_stdio;
 mod mcp_tools;
 mod policy;
 mod types;
 mod ws_server;
 
-use llm::{LlmGateway};
 use policy::{PolicyConfig, PolicyEngine, PolicyRequest};
 use ws_server::{ConnectionManager, ws_router};
 
@@ -73,7 +72,6 @@ enum BridgeResponse {
 }
 
 struct BridgeServer {
-    llm_gateway: Arc<LlmGateway>,
     policy_engine: Arc<PolicyEngine>,
     auth_token: String,
 }
@@ -97,7 +95,6 @@ impl BridgeServer {
             .unwrap_or_else(load_or_create_token);
 
         Ok(Self {
-            llm_gateway: Arc::new(LlmGateway::new()?),
             policy_engine,
             auth_token,
         })
@@ -205,7 +202,6 @@ impl BridgeServer {
                 Ok(BridgeResponse::Ok {
                     request_id,
                     data: serde_json::json!({
-                        "llm_models": self.llm_gateway.available_models(),
                         "policy_config": self.policy_engine.get_config(),
                     })
                 })
@@ -533,6 +529,38 @@ async fn run_mcp_mode(
 ) -> Result<()> {
     let (port, _ws_handle) =
         start_ws_listener(connection_manager.clone(), port_file_override).await?;
+
+    // Write port to ~/.momo/mcp_bridge_port with file locking to prevent race
+    // conditions when multiple bridge instances start concurrently.
+    let port_file = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".momo")
+        .join("mcp_bridge_port");
+
+    if let Some(parent) = port_file.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+
+    match std::fs::File::create(&port_file) {
+        Ok(file) => {
+            // Acquire exclusive lock before writing
+            if let Err(e) = file.try_lock_exclusive() {
+                warn!("Could not lock MCP bridge port file: {}", e);
+            } else {
+                use std::io::Write;
+                if let Err(e) = (&file).write_all(port.to_string().as_bytes()) {
+                    warn!("Could not write MCP bridge port file: {}", e);
+                } else {
+                    info!("MCP bridge port written to {:?}", port_file);
+                }
+                // Lock is automatically released when file handle drops
+            }
+        }
+        Err(e) => {
+            warn!("Could not create MCP bridge port file: {}", e);
+        }
+    }
+
     info!("Mode B: WS server on port {port}; MCP stdio on stdin/stdout");
     mcp_stdio::run(connection_manager).await?;
     Ok(())

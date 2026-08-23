@@ -7,6 +7,9 @@ export class MessageRouter {
   private orchestrator: AgentOrchestrator;
   private handlers: Map<string, (payload: unknown, sender: chrome.runtime.MessageSender | undefined) => Promise<unknown>> = new Map();
 
+  /** Track active CDP operations by request_id so cancellation can abort them. */
+  private activeCdpOperations: Map<string, AbortController> = new Map();
+
   /** Message types a content script (tab-attached, self-origin) may originate. */
   private static readonly CONTENT_SCRIPT_MESSAGE_TYPES: ReadonlySet<string> = new Set([
     'CDP_ATTACH_REQUEST',
@@ -226,6 +229,7 @@ export class MessageRouter {
     this.handlers.set('CDP_ATTACH_REQUEST', this.handleCdpAttachRequest.bind(this));
     this.handlers.set('CDP_GET_TARGETS', this.handleCdpGetTargets.bind(this));
     this.handlers.set('CDP_DETACH', this.handleCdpDetach.bind(this));
+    this.handlers.set('CANCEL_ACTION', this.handleCancelAction.bind(this));
 
     // Bridge requests via WebSocket (replaces native-messaging proxy)
     this.handlers.set('BRIDGE_REQUEST', this.handleBridgeRequest.bind(this));
@@ -440,5 +444,21 @@ export class MessageRouter {
   private async handlePersistState() {
     await this.orchestrator.persistState();
     return { success: true };
+  }
+
+  private async handleCancelAction(payload: unknown) {
+    const { request_id } = payload as { request_id: string };
+    if (!request_id) {
+      return { success: false, error: 'Missing request_id' };
+    }
+
+    const abortController = this.activeCdpOperations.get(request_id);
+    if (abortController) {
+      abortController.abort();
+      this.activeCdpOperations.delete(request_id);
+      return { success: true, cancelled: true };
+    }
+
+    return { success: true, cancelled: false, reason: 'No active operation for request_id' };
   }
 }

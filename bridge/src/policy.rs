@@ -29,6 +29,10 @@ pub enum ConfirmationPolicy {
     Never,
 }
 
+// TODO(v2): DataRetentionPolicy is persisted to the database but not yet
+// enforced by the policy engine. Session/persistent distinction is planned
+// for Phase 10 (audit log rotation and retention).
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DataRetentionPolicy {
@@ -43,6 +47,11 @@ pub struct TokenBudgetPolicy {
     pub reset_interval_hours: u64,
 }
 
+// TODO(v2): RiskThresholds are persisted to the database but not yet enforced
+// by the policy engine. Risk classification is currently keyword-based
+// (see classify_risk at policy.rs:405-429). Threshold-based risk scoring is
+// planned for a future version with action frequency tracking.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RiskThresholds {
     pub read: u64,
@@ -364,7 +373,12 @@ impl PolicyEngine {
                 *usage = 0;
                 *last_reset = Utc::now();
             }
-            if *usage + tokens_needed > config.token_budget.max_tokens {
+
+            let current_usage = *usage;
+            let max_tokens = config.token_budget.max_tokens;
+
+            // Check if budget would be exceeded
+            if current_usage + tokens_needed > max_tokens {
                 return Ok(PolicyDecision {
                     allowed: false,
                     requires_confirmation: false,
@@ -373,6 +387,21 @@ impl PolicyEngine {
                     confirmation_data: None,
                 });
             }
+
+            // Emit warning if approaching threshold
+            let projected_usage = current_usage + tokens_needed;
+            let usage_ratio = projected_usage as f64 / max_tokens as f64;
+            if usage_ratio > config.token_budget.warning_threshold {
+                tracing::warn!(
+                    current = current_usage,
+                    projected = projected_usage,
+                    max = max_tokens,
+                    ratio = %format!("{:.1}%", usage_ratio * 100.0),
+                    "Token budget nearing exhaustion (threshold: {:.1}%)",
+                    config.token_budget.warning_threshold * 100.0
+                );
+            }
+
             *usage += tokens_needed;
         }
 

@@ -33,6 +33,10 @@ export interface ToolContext {
    * orchestrator's confirmation re-execution path.
    */
   preAuthorized?: boolean;
+  /** Register a CDP operation for cancellation support. */
+  registerCdpOperation?: (requestId: string, abortController: AbortController) => void;
+  /** Unregister a CDP operation after it completes. */
+  unregisterCdpOperation?: (requestId: string) => void;
 }
 
 export type ToolExecutor = (args: Record<string, unknown>, context: ToolContext) => Promise<ToolResult>;
