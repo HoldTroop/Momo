@@ -48,8 +48,7 @@ export function extractPerception(includeMarkdown: boolean = true): PerceptionRe
     while (walker.nextNode()) {
       const el = walker.currentNode as HTMLElement;
       if (isActionable(el)) {
-        const refId = `momo-${++counter}`;
-        el.setAttribute('data-momo-ref', refId);
+        const refId = `el_${++counter}`;
         const selector = generateSelector(el);
         if (selector && !refIdMap[selector]) {
           refIdMap[selector] = refId;
@@ -147,10 +146,9 @@ export function resolveTarget(refId: string | undefined, selector: string | unde
 }
 
 // --- Hybrid perception layer (Phase 9 M3) ------------------------------------
-// A parallel, *additive* element index keyed by `data-momo-ref="el_XX"`. It is
-// deliberately distinct from `data-momo-ref-id="momo-N"` (set by
-// extractPerception): MCP's execute_action targets el_XX refs via
-// resolveByRefStrict, which does NOT fall back to raw CSS selectors.
+// Element index keyed by `data-momo-ref="el_XX"`. MCP's execute_action targets
+// el_XX refs via resolveByRefStrict, which does NOT fall back to raw CSS
+// selectors.
 
 export interface InteractiveElement {
   ref: string;
@@ -230,8 +228,6 @@ export function getInteractiveElements(): InteractiveElementsResult {
     if (!isActionable(el) || !el.checkVisibility()) continue;
 
     const ref = `el_${++counter}`;
-    // Additive: inject alongside the existing data-momo-ref-id. Do NOT migrate
-    // or touch the old attribute.
     el.setAttribute('data-momo-ref', ref);
 
     const rect = el.getBoundingClientRect();
