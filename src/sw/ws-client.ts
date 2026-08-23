@@ -7,8 +7,8 @@ type PendingResolver = (result: Promise<unknown>) => void;
 type OutboxEntry = {
   type: string;
   payload: object;
-  resolve: (value: any) => void;
-  reject: (reason?: any) => void;
+  resolve: (value: unknown) => void;
+  reject: (reason?: unknown) => void;
 };
 
 export class WsClient {
@@ -269,7 +269,7 @@ export class WsClient {
       // is back up. This replaces the old throw-on-disconnect, which dropped the
       // request the moment the SW woke before the WS reconnected (BUG 2).
       return new Promise<T>((resolve, reject) => {
-        this.outbox.push({ type, payload, resolve, reject });
+        this.outbox.push({ type, payload, resolve: resolve as (value: unknown) => void, reject });
         if (!this.ws || this.ws.readyState === WebSocket.CLOSED || this.ws.readyState === WebSocket.CLOSING) {
           this.scheduleReconnect(true);
         }
