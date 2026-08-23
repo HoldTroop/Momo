@@ -1,7 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AgentOrchestrator, type AgentState, type Plan, type PlanStep } from './orchestrator.js';
 import { PersistenceManager } from '../lib/persistence.js';
-import { ToolRegistry } from '../lib/tool-registry.js';
+import { ToolRegistry, type ToolDefinition, type ToolContext } from '../lib/tool-registry.js';
+
+// Mock type for PersistenceManager
+interface MockPersistenceManager {
+  init: ReturnType<typeof vi.fn>;
+  getAllSessions: ReturnType<typeof vi.fn>;
+  saveSession: ReturnType<typeof vi.fn>;
+  saveSessionWorkingCopy: ReturnType<typeof vi.fn>;
+  getSession: ReturnType<typeof vi.fn>;
+  loadSessionWorkingCopy: ReturnType<typeof vi.fn>;
+  deleteSession: ReturnType<typeof vi.fn>;
+}
 
 // Mock dependencies
 vi.mock('../lib/persistence.js');
@@ -61,7 +72,7 @@ vi.stubGlobal('crypto', { randomUUID: () => 'test-uuid-123' });
 
 describe('AgentOrchestrator State Machine', () => {
   let orchestrator: AgentOrchestrator;
-  let mockPersistence: any;
+  let mockPersistence: MockPersistenceManager;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -205,7 +216,7 @@ describe('AgentOrchestrator State Machine', () => {
         policy: { riskClass: 'read' },
       };
 
-      vi.spyOn(ToolRegistry.prototype, 'get').mockReturnValue(mockTool as any);
+      vi.spyOn(ToolRegistry.prototype, 'get').mockReturnValue(mockTool as unknown as ToolDefinition);
       vi.spyOn(ToolRegistry.prototype, 'validateArguments').mockReturnValue(null);
 
       await orchestrator.startTask('Test', { plan });
@@ -249,7 +260,7 @@ describe('AgentOrchestrator State Machine', () => {
         policy: { riskClass: 'write' },
       };
 
-      vi.spyOn(ToolRegistry.prototype, 'get').mockReturnValue(mockTool as any);
+      vi.spyOn(ToolRegistry.prototype, 'get').mockReturnValue(mockTool as unknown as ToolDefinition);
       vi.spyOn(ToolRegistry.prototype, 'validateArguments').mockReturnValue(null);
 
       await orchestrator.startTask('Test', { plan });
@@ -318,7 +329,7 @@ describe('AgentOrchestrator State Machine', () => {
 
       let callCount = 0;
       const mockTool = {
-        execute: vi.fn((args: any, context: any) => {
+        execute: vi.fn((args: Record<string, unknown>, context: ToolContext) => {
           callCount++;
           if (callCount === 1 && !context.preAuthorized) {
             return Promise.resolve({
@@ -345,7 +356,7 @@ describe('AgentOrchestrator State Machine', () => {
         policy: { riskClass: 'write' },
       };
 
-      vi.spyOn(ToolRegistry.prototype, 'get').mockReturnValue(mockTool as any);
+      vi.spyOn(ToolRegistry.prototype, 'get').mockReturnValue(mockTool as unknown as ToolDefinition);
       vi.spyOn(ToolRegistry.prototype, 'validateArguments').mockReturnValue(null);
 
       await orchestrator.startTask('Test', { plan });
@@ -394,7 +405,7 @@ describe('AgentOrchestrator State Machine', () => {
         policy: { riskClass: 'write' },
       };
 
-      vi.spyOn(ToolRegistry.prototype, 'get').mockReturnValue(mockTool as any);
+      vi.spyOn(ToolRegistry.prototype, 'get').mockReturnValue(mockTool as unknown as ToolDefinition);
       vi.spyOn(ToolRegistry.prototype, 'validateArguments').mockReturnValue(null);
 
       await orchestrator.startTask('Test', { plan });
@@ -445,7 +456,7 @@ describe('AgentOrchestrator State Machine', () => {
         policy: { riskClass: 'read' },
       };
 
-      vi.spyOn(ToolRegistry.prototype, 'get').mockReturnValue(mockTool as any);
+      vi.spyOn(ToolRegistry.prototype, 'get').mockReturnValue(mockTool as unknown as ToolDefinition);
       vi.spyOn(ToolRegistry.prototype, 'validateArguments').mockReturnValue(null);
 
       await orchestrator.startTask('Test', { plan });
@@ -487,7 +498,7 @@ describe('AgentOrchestrator State Machine', () => {
         policy: { riskClass: 'write' },
       };
 
-      vi.spyOn(ToolRegistry.prototype, 'get').mockReturnValue(mockTool as any);
+      vi.spyOn(ToolRegistry.prototype, 'get').mockReturnValue(mockTool as unknown as ToolDefinition);
       vi.spyOn(ToolRegistry.prototype, 'validateArguments').mockReturnValue(null);
 
       await orchestrator.startTask('Test', { plan });
@@ -531,7 +542,7 @@ describe('AgentOrchestrator State Machine', () => {
         policy: { riskClass: 'read' },
       };
 
-      vi.spyOn(ToolRegistry.prototype, 'get').mockReturnValue(mockTool as any);
+      vi.spyOn(ToolRegistry.prototype, 'get').mockReturnValue(mockTool as unknown as ToolDefinition);
       vi.spyOn(ToolRegistry.prototype, 'validateArguments').mockReturnValue(null);
 
       await orchestrator.startTask('Test', { plan });
@@ -573,7 +584,7 @@ describe('AgentOrchestrator State Machine', () => {
         policy: { riskClass: 'read' },
       };
 
-      vi.spyOn(ToolRegistry.prototype, 'get').mockReturnValue(mockTool as any);
+      vi.spyOn(ToolRegistry.prototype, 'get').mockReturnValue(mockTool as unknown as ToolDefinition);
       vi.spyOn(ToolRegistry.prototype, 'validateArguments').mockReturnValue(null);
 
       await orchestrator.startTask('Test', { plan });
