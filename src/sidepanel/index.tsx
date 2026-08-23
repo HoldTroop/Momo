@@ -2,12 +2,51 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { PlanStep } from '../sw/orchestrator.js';
 
+interface ToolCall {
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+interface ToolResult {
+  success: boolean;
+  summary: string;
+  data?: unknown;
+  error?: string;
+}
+
+interface PortMessage {
+  type: string;
+  payload?: {
+    state?: Partial<AgentState>;
+    goal?: string;
+    plan?: PlanStep[];
+    stepIndex?: number;
+    action?: ToolCall;
+    result?: ToolResult;
+    reason?: string;
+    stepId?: string;
+    error?: string;
+    actionHash?: string;
+    pageRevision?: number;
+    origin?: string;
+    target?: string;
+    reversible?: boolean;
+    riskClass?: string;
+    content?: string;
+    event?: string;
+    data?: {
+      chunk?: string | { delta?: string; text?: string };
+    };
+    sessions?: Session[];
+  };
+}
+
 interface Message {
   id: string;
   role: 'user' | 'agent';
   content: string;
-  toolCalls?: any[];
-  toolResults?: any[];
+  toolCalls?: ToolCall[];
+  toolResults?: ToolResult[];
   timestamp: number;
 }
 
@@ -25,7 +64,7 @@ interface AgentState {
   goal: string;
   plan: PlanStep[] | null;
   currentStep: number;
-  history: any[];
+  history: Message[];
   isRunning: boolean;
 }
 
@@ -54,9 +93,9 @@ function App() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatAreaRef = useRef<HTMLDivElement>(null);
   const portRef = useRef<chrome.runtime.Port | null>(null);
-  const handlePortMessageRef = useRef<(msg: any) => void>(() => {});
+  const handlePortMessageRef = useRef<(msg: PortMessage) => void>(() => {});
   const loadSessionsRef = useRef<() => void>(() => {});
-  const runtimeListener = useRef((msg: any) => {
+  const runtimeListener = useRef((msg: PortMessage) => {
     handlePortMessageRef.current(msg);
   }).current;
 
@@ -115,12 +154,12 @@ function App() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
-  const handlePortMessage = (msg: any) => {
-    if (msg.type === 'EVENT') { handlePortMessage(msg.payload); return; }
+  const handlePortMessage = (msg: PortMessage) => {
+    if (msg.type === 'EVENT') { handlePortMessage(msg.payload as PortMessage); return; }
     if (msg.type === 'RESPONSE') {
       const p = msg.payload;
       if (p?.error) { setIsLoading(false); addMessage({ role: 'agent', content: `❌ Error: ${p.error}` }); return; }
-      if (p && typeof p === 'object') { handlePortMessage(p); return; }
+      if (p && typeof p === 'object') { handlePortMessage(p as PortMessage); return; }
       return;
     }
 
@@ -143,7 +182,9 @@ function App() {
         addMessage({ role: 'agent', content: `Step ${msg.payload.stepIndex + 1}: ${msg.payload.action.name}`, toolCalls: [msg.payload.action] });
         break;
       case 'STEP_COMPLETED':
-        updateLastAgentMessage(msg.payload.result);
+        if (msg.payload?.result) {
+          updateLastAgentMessage(msg.payload.result);
+        }
         break;
       case 'TASK_COMPLETED':
         addMessage({ role: 'agent', content: '✅ Task completed successfully!' });
@@ -196,7 +237,7 @@ function App() {
   handlePortMessageRef.current = handlePortMessage;
   loadSessionsRef.current = loadSessions;
 
-  const sendToSw = (type: string, payload: any) => {
+  const sendToSw = (type: string, payload: Record<string, unknown>) => {
     if (portRef.current) {
       portRef.current.postMessage({ type, payload });
     }
@@ -211,7 +252,7 @@ function App() {
     setMessages(prev => [...prev, newMessage]);
   };
 
-  const updateLastAgentMessage = (result: any) => {
+  const updateLastAgentMessage = (result: ToolResult) => {
     setMessages(prev => {
       const idx = prev.findLastIndex(m => m.role === 'agent');
       if (idx === -1) return prev;
