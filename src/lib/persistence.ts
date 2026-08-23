@@ -2,17 +2,19 @@ import { AgentState, Checkpoint, WalEntry, WalOperation, TaskQueueEntry, TaskSta
 import SuperJSON from 'superjson';
 import type { SuperJSONResult } from 'superjson';
 import { redactText, redactValue } from './redaction.js';
+import type Dexie from 'dexie';
+import type { Transaction } from 'dexie';
 
 declare global {
   interface Window {
-    Dexie: any;
-    dexie: any;
+    Dexie: typeof Dexie;
+    dexie: Dexie;
   }
 }
 
 interface SessionRecord {
   sessionId: string;
-  state: AgentState;
+  state: SuperJSONResult;
   createdAt: number;
   updatedAt: number;
 }
@@ -37,7 +39,7 @@ interface CheckpointRecord {
 
 interface SessionWorkingRecord {
   sessionId: string;
-  state: string;
+  state: SuperJSONResult;
   updatedAt: number;
 }
 
@@ -55,8 +57,35 @@ interface TaskRecord {
   updatedAt: number;
 }
 
+interface CompressedDomAction {
+  label: string;
+  [key: string]: unknown;
+}
+
+interface CompressedDom {
+  title?: string;
+  summary?: string;
+  actions?: CompressedDomAction[];
+  [key: string]: unknown;
+}
+
+interface DomCacheRecord {
+  url: string;
+  data: CompressedDom;
+  timestamp: number;
+}
+
+interface AgentDB extends Dexie {
+  sessions: Dexie.Table<SessionRecord, string>;
+  wal: Dexie.Table<WalRecord, number>;
+  checkpoints: Dexie.Table<CheckpointRecord, number>;
+  tasks: Dexie.Table<TaskRecord, string>;
+  sessionWorking: Dexie.Table<SessionWorkingRecord, string>;
+  domCache: Dexie.Table<DomCacheRecord, string>;
+}
+
 class PersistenceManager {
-  private db: any = null;
+  private db: AgentDB | null = null;
   private initialized = false;
   /**
    * Sessions deleted this service-worker lifetime. Guards against the race where
@@ -71,7 +100,7 @@ class PersistenceManager {
 
     // Dynamic import Dexie
     const { default: Dexie } = await import('dexie');
-    this.db = new Dexie('AgentDB');
+    this.db = new Dexie('AgentDB') as AgentDB;
 
     this.db.version(1).stores({
       sessions: 'sessionId, updatedAt',
@@ -86,14 +115,14 @@ class PersistenceManager {
       checkpoints: 'sessionId, stepIndex, timestamp',
       tasks: 'id, sessionId, status, deadline, priority',
       domCache: 'url, timestamp',
-    }).upgrade(async (trans: any) => {
+    }).upgrade(async (trans: Transaction) => {
       // Migration from v1 to v2
       await trans.table('domCache').clear();
     });
 
     this.db.version(3).stores({
       checkpoints: '++id, sessionId, stepIndex, timestamp',
-    }).upgrade(async (trans: any) => {
+    }).upgrade(async (trans: Transaction) => {
       // v2 keyed checkpoints by `sessionId` (the primary key), so each session
       // held at most one row. The auto-increment key lets a session accumulate
       // multiple checkpoints. Changing the primary key recreates the table; the
@@ -338,16 +367,16 @@ class PersistenceManager {
       });
   }
 
-  async saveDomCache(url: string, compressedDom: any): Promise<void> {
+  async saveDomCache(url: string, compressedDom: CompressedDom): Promise<void> {
     if (!this.initialized) await this.init();
 
-    await this.db.domCache.put({ url, data: this.redactCompressedDom(compressedDom), timestamp: Date.now() });
+    await this.db!.domCache.put({ url, data: this.redactCompressedDom(compressedDom), timestamp: Date.now() });
   }
 
-  async getDomCache(url: string): Promise<any | null> {
+  async getDomCache(url: string): Promise<CompressedDom | null> {
     if (!this.initialized) await this.init();
 
-    const record = await this.db.domCache.get(url);
+    const record = await this.db!.domCache.get(url);
     return record?.data || null;
   }
 
@@ -368,14 +397,14 @@ class PersistenceManager {
     }
   }
 
-  private redactCompressedDom(dom: any): any {
+  private redactCompressedDom(dom: CompressedDom): CompressedDom {
     if (!dom) return dom;
     return {
       ...dom,
       title: redactText(dom.title ?? ''),
       summary: redactText(dom.summary ?? ''),
       actions: Array.isArray(dom.actions)
-        ? dom.actions.map((a: any) => ({ ...a, label: redactText(a.label ?? '') }))
+        ? dom.actions.map((a: CompressedDomAction) => ({ ...a, label: redactText(a.label ?? '') }))
         : dom.actions,
     };
   }
@@ -455,16 +484,16 @@ class PersistenceManager {
 
   private sanitizeForSerialization(state: unknown): unknown {
     if (state && typeof state === 'object') {
-      return { ...(state as any), pendingHumanIntervention: null };
+      return { ...(state as Record<string, unknown>), pendingHumanIntervention: null };
     }
     return state;
   }
 
-  private serializeState(state: AgentState): any {
+  private serializeState(state: AgentState): SuperJSONResult {
     return SuperJSON.serialize({ ...state });
   }
 
-  private deserializeState(data: any): AgentState {
+  private deserializeState(data: SuperJSONResult): AgentState {
     return SuperJSON.deserialize(data) as AgentState;
   }
 
@@ -479,11 +508,11 @@ class PersistenceManager {
     return {
       id: record.id,
       sessionId: record.sessionId,
-      type: record.type as any,
+      type: record.type as TaskQueueEntry['type'],
       payload,
       priority: record.priority,
       deadline: record.deadline,
-      retryPolicy: record.retryPolicy as any,
+      retryPolicy: record.retryPolicy as TaskQueueEntry['retryPolicy'],
       attempts: record.attempts,
       status: record.status,
     };
