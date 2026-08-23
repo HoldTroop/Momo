@@ -142,6 +142,13 @@ class PersistenceManager {
     }
   }
 
+  /**
+   * Returns the initialized database instance.
+   *
+   * Safety: All public methods guard with `if (!this.initialized) await this.init();`
+   * before calling this, ensuring this.db is non-null. The throw here is defensive
+   * against future refactoring that bypasses the guard.
+   */
   private getDb(): AgentDB {
     if (!this.db) {
       throw new Error('[Persistence] Database not initialized');
