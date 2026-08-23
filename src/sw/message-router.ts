@@ -1,4 +1,4 @@
-import { AgentOrchestrator, HumanResponse, BridgeEvent, BridgeCommand } from './orchestrator.js';
+import { AgentOrchestrator, HumanResponse, BridgeEvent, BridgeCommand, Plan, TaskPolicy } from './orchestrator.js';
 import { cdpAdapter } from './cdp-adapter.js';
 import { redactText } from '../lib/redaction.js';
 import { getWsClient, initWsClient } from './ws-client.js';
@@ -183,15 +183,22 @@ export class MessageRouter {
    * so policy gating, strict-ref resolution, CDP dispatch, confirmation,
    * redaction, and audit reporting are identical to Mode A. A failed strict-ref
    * resolution surfaces as `error: "stale_reference"` on the returned tool
-   * result, which the bridge maps to an `isError: true` MCP response (§5.3). */
+   * result, which the bridge maps to an `isError: true` MCP response (§5.3).
+   * Per-session serialization (mcp-2): actions within a session run sequentially
+   * but sessions run in parallel. */
   private async executeAction(params: unknown): Promise<unknown> {
     if (!this.orchestrator.getState()) {
       return { error: 'No active session' };
     }
+    const state = this.orchestrator.getState();
+    if (!state) {
+      return { error: 'No active session' };
+    }
     const args = (params && typeof params === 'object' ? params : {}) as Record<string, unknown>;
-    return this.orchestrator.executeToolCall(
+    return this.orchestrator.executeToolCallSerialized(
       { name: 'execute_action', arguments: args },
       crypto.randomUUID(),
+      state.sessionId,
     );
   }
 
@@ -278,8 +285,13 @@ export class MessageRouter {
   }
 
   private async handleStartTask(payload: unknown) {
-    const { goal, sessionId, plan, policy } = payload as { goal: string; sessionId?: string; plan?: any; policy?: any };
-    await this.orchestrator.startTask(goal, { sessionId, plan, policy });
+    const { goal, sessionId, plan, policy } = payload as {
+      goal: string;
+      sessionId?: string;
+      plan?: Record<string, unknown>;
+      policy?: Record<string, unknown>;
+    };
+    await this.orchestrator.startTask(goal, { sessionId, plan: plan as Plan | undefined, policy: policy as TaskPolicy | undefined });
     return { success: true };
   }
 

@@ -177,6 +177,9 @@ export class AgentOrchestrator {
   private cdpBindings: cdpLifecycle.CdpBindings = cdpLifecycle.createCdpBindings();
   private inPersistBroadcast = false;
 
+  /** Per-session execution queues for execute_action serialization (mcp-2). */
+  private sessionExecutionQueues: Map<string, Promise<unknown>> = new Map();
+
   constructor(persistence: PersistenceManager) {
     this.persistence = persistence;
     this.toolRegistry = new ToolRegistry();
@@ -293,7 +296,7 @@ export class AgentOrchestrator {
   /** C9: Normalize a plan at ingest so the runtime always sees a Plan with an
    *  array of steps and a real Map of contingencies, whether it arrived as a
    *  typed Plan or a plain JSON object from an external agent. */
-  private normalizePlan(plan: any): Plan {
+  private normalizePlan(plan: Plan | { goal?: string; steps?: PlanStep[]; contingencies?: unknown }): Plan {
     const steps: PlanStep[] = Array.isArray(plan.steps) ? plan.steps : [];
     let contingencies: Map<string, PlanStep[]>;
     if (plan.contingencies instanceof Map) {
@@ -466,6 +469,38 @@ export class AgentOrchestrator {
     }
 
     return this.redactResult(result);
+  }
+
+  /**
+   * Execute a tool call with per-session serialization (mcp-2). Bridge-initiated
+   * execute_action commands use this to ensure actions within a session run
+   * sequentially, while allowing parallel sessions.
+   */
+  async executeToolCallSerialized(toolCall: ToolCall, idempotencyKey: string, sessionId: string): Promise<ToolResult> {
+    const executeNow = async (): Promise<ToolResult> => {
+      return this.executeToolCall(toolCall, idempotencyKey, idempotencyKey);
+    };
+
+    // Get or create the execution queue for this session
+    const currentQueue = this.sessionExecutionQueues.get(sessionId) ?? Promise.resolve();
+
+    // Chain this execution after the current queue
+    const newQueue = currentQueue.then(
+      () => executeNow(),
+      () => executeNow(), // Execute even if previous action failed
+    );
+
+    this.sessionExecutionQueues.set(sessionId, newQueue);
+
+    try {
+      const result = await newQueue;
+      return result;
+    } finally {
+      // Clean up queue if this was the last pending operation
+      if (this.sessionExecutionQueues.get(sessionId) === newQueue) {
+        this.sessionExecutionQueues.delete(sessionId);
+      }
+    }
   }
 
   /** Redact any sensitive values before a tool result leaves the extension. */
