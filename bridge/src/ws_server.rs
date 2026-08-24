@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use indexmap::IndexMap;
 
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
@@ -55,7 +56,7 @@ type PendingCommands =
 
 /// Manages all active WebSocket connections.
 pub struct ConnectionManager {
-    connections: Arc<RwLock<HashMap<Uuid, WsConnection>>>,
+    connections: Arc<RwLock<IndexMap<Uuid, WsConnection>>>,
     bridge_server: Arc<BridgeServer>,
     pending_commands: PendingCommands,
 }
@@ -63,7 +64,7 @@ pub struct ConnectionManager {
 impl ConnectionManager {
     pub fn new(bridge_server: Arc<BridgeServer>) -> Self {
         Self {
-            connections: Arc::new(RwLock::new(HashMap::new())),
+            connections: Arc::new(RwLock::new(IndexMap::new())),
             bridge_server,
             pending_commands: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -169,7 +170,7 @@ impl ConnectionManager {
             }
 
             // Cleanup on disconnect (idempotent: also runs after eviction)
-            connections.write().await.remove(&conn_id);
+            connections.write().await.shift_remove(&conn_id);
             // Fail THIS connection's in-flight commands: dropping the oneshot
             // Senders makes the awaiting `send_command` calls resolve as
             // Disconnected rather than hang until the timeout (§6.4). Other
@@ -211,7 +212,7 @@ impl ConnectionManager {
                     }
                 };
                 if should_remove {
-                    heartbeat_connections.write().await.remove(&heartbeat_conn_id);
+                    heartbeat_connections.write().await.shift_remove(&heartbeat_conn_id);
                     let _ = shutdown_tx.send(true);
                     break;
                 }
@@ -328,7 +329,7 @@ enum FrameFlow {
 /// Handle one inbound WebSocket message (read loop body).
 async fn process_message(
     conn_id: Uuid,
-    connections: &Arc<RwLock<HashMap<Uuid, WsConnection>>>,
+    connections: &Arc<RwLock<IndexMap<Uuid, WsConnection>>>,
     bridge_server: &BridgeServer,
     pending_commands: &PendingCommands,
     authenticated: &mut bool,
@@ -375,7 +376,7 @@ async fn process_message(
 /// Parse and dispatch one binary frame (read loop body).
 async fn process_frame(
     conn_id: Uuid,
-    connections: &Arc<RwLock<HashMap<Uuid, WsConnection>>>,
+    connections: &Arc<RwLock<IndexMap<Uuid, WsConnection>>>,
     bridge_server: &BridgeServer,
     pending_commands: &PendingCommands,
     authenticated: &mut bool,
