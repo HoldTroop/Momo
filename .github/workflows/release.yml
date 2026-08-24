@@ -61,6 +61,14 @@ jobs:
         continue-on-error: true
         run: cargo build --release
 
+      - name: Cargo test
+        working-directory: bridge
+        run: cargo test --all-features
+
+      - name: Cargo clippy
+        working-directory: bridge
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
       - name: Publish draft release
         uses: softprops/action-gh-release@v2
         with:
