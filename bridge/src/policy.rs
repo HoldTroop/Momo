@@ -302,7 +302,7 @@ impl PolicyEngine {
     pub fn check_action_permitted(&self, action: &str) -> bool {
         let config = self.config.read();
         if config.permitted_actions.is_empty() {
-            return !*self.mcp_mode.read();
+            return false; // Fail-closed: empty allowlist denies all actions
         }
         config.permitted_actions.contains(&action.to_string())
     }
