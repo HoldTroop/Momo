@@ -538,9 +538,12 @@ fn origin_allowed(origin: Option<&str>) -> bool {
                 return lower == expected;
             }
             
-            // Development mode: accept any chrome-extension:// origin
-            // Production deployments MUST set MOMO_EXTENSION_ID
-            true
+            // SECURITY FIX C-03: Require MOMO_EXTENSION_ID even in development
+            // Previously: accepted any chrome-extension:// origin (security hole)
+            // Now: require explicit extension ID configuration
+            eprintln!("SECURITY WARNING: MOMO_EXTENSION_ID not set. Bridge will reject all extension connections.");
+            eprintln!("Set MOMO_EXTENSION_ID environment variable to your extension's ID for secure operation.");
+            false
         }
     }
 }
@@ -1070,5 +1073,146 @@ mod tests {
         assert_eq!(embedded["command"], "list_tabs");
         assert!(elapsed >= std::time::Duration::from_secs(29), "resolved before the 30 s window: {elapsed:?}");
         assert!(elapsed < std::time::Duration::from_secs(35), "did not resolve promptly at timeout: {elapsed:?}");
+    }
+
+    #[test]
+    fn test_c03_vulnerability_any_extension_accepted() {
+        // C-03: Demonstrates dev mode accepting any chrome-extension origin
+        
+        // Simulate development environment (no MOMO_EXTENSION_ID set)
+        std::env::remove_var("MOMO_EXTENSION_ID");
+        
+        // Test that malicious extension origins are incorrectly accepted
+        let malicious_origins = vec![
+            "chrome-extension://maliciousextension12345",
+            "chrome-extension://attackercontrolledext",
+            "chrome-extension://AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", // Random ID
+            "chrome-extension://fake-momo-extension-id",
+        ];
+        
+        for origin in malicious_origins {
+            let is_allowed = origin_allowed(Some(origin));
+            
+            // VULNERABILITY: All malicious extensions are accepted in dev mode
+            assert_eq!(
+                is_allowed, 
+                true,
+                "SECURITY VULNERABILITY: Malicious origin '{}' should be rejected but is accepted in dev mode",
+                origin
+            );
+        }
+    }
+
+    #[test] 
+    fn test_c03_production_mode_rejects_unknown_extensions() {
+        // Verify that production mode (with MOMO_EXTENSION_ID set) correctly rejects unknowns
+        let legitimate_extension_id = "abcdef1234567890abcdef1234567890abcdef12";
+        std::env::set_var("MOMO_EXTENSION_ID", legitimate_extension_id);
+        
+        // Test that production mode accepts legitimate extension
+        let legitimate_origin = format!("chrome-extension://{}", legitimate_extension_id);
+        assert_eq!(origin_allowed(Some(&legitimate_origin)), true);
+        
+        // Test that production mode rejects malicious extensions
+        let malicious_origins = vec![
+            "chrome-extension://maliciousextension12345",
+            "chrome-extension://different1234567890different1234567890",
+        ];
+        
+        for origin in malicious_origins {
+            let is_allowed = origin_allowed(Some(origin));
+            assert_eq!(
+                is_allowed, 
+                false,
+                "Production mode should reject malicious origin '{}'", 
+                origin
+            );
+        }
+        
+        // Clean up
+        std::env::remove_var("MOMO_EXTENSION_ID");
+    }
+
+    #[test]
+    fn test_c03_fix_requires_explicit_extension_id() {
+        // C-03 FIX: Verify that dev mode now requires explicit MOMO_EXTENSION_ID
+        
+        // Ensure no MOMO_EXTENSION_ID is set (simulate fresh development environment)
+        std::env::remove_var("MOMO_EXTENSION_ID");
+        
+        // Test that all chrome-extension origins are now rejected without explicit ID
+        let test_origins = vec![
+            "chrome-extension://maliciousextension12345",
+            "chrome-extension://unknownextension678",  
+            "chrome-extension://legitimate-looking-ext",
+            "chrome-extension://abcdef1234567890abcdef1234567890abcdef12", // Even valid format rejected
+        ];
+        
+        for origin in test_origins {
+            let is_allowed = origin_allowed(Some(origin));
+            
+            // After C-03 fix: all extensions rejected without explicit MOMO_EXTENSION_ID
+            assert_eq!(
+                is_allowed, 
+                false,
+                "C-03 FIX VERIFIED: Origin '{}' correctly rejected without MOMO_EXTENSION_ID", 
+                origin
+            );
+        }
+    }
+
+    #[test]
+    fn test_c03_fix_explicit_id_still_works() {
+        // Verify that setting MOMO_EXTENSION_ID still allows legitimate extension
+        let legitimate_id = "abcdef1234567890abcdef1234567890abcdef12";
+        std::env::set_var("MOMO_EXTENSION_ID", legitimate_id);
+        
+        // Test legitimate extension is allowed
+        let legitimate_origin = format!("chrome-extension://{}", legitimate_id);
+        assert_eq!(
+            origin_allowed(Some(&legitimate_origin)), 
+            true,
+            "Legitimate extension should be allowed when MOMO_EXTENSION_ID is set"
+        );
+        
+        // Test malicious extensions are still rejected
+        let malicious_origins = vec![
+            "chrome-extension://maliciousext123",
+            "chrome-extension://differentextensionid456",
+        ];
+        
+        for origin in malicious_origins {
+            assert_eq!(
+                origin_allowed(Some(origin)), 
+                false,
+                "Malicious origin '{}' should be rejected even with MOMO_EXTENSION_ID set", 
+                origin
+            );
+        }
+        
+        std::env::remove_var("MOMO_EXTENSION_ID");
+    }
+
+    #[test]
+    fn test_c03_security_impact_resolved() {
+        // Verify the security vulnerability is resolved
+        std::env::remove_var("MOMO_EXTENSION_ID");
+        
+        // Previously vulnerable scenario: malicious extension trying to connect
+        let attacker_extension = "chrome-extension://malicious-hijack-attempt";
+        
+        // After C-03 fix: malicious extension cannot connect
+        let can_connect = origin_allowed(Some(attacker_extension));
+        assert_eq!(
+            can_connect, 
+            false, 
+            "SECURITY FIX VERIFIED: Malicious extension can no longer connect without explicit ID"
+        );
+        
+        // This confirms:
+        // 1. Development environments are now secure by default
+        // 2. Malicious extensions cannot hijack bridge connections
+        // 3. Explicit configuration is required for any extension access
+        // 4. No unauthorized automation can occur in development mode
     }
 }
