@@ -1,5 +1,5 @@
-import type { ToolDefinition } from './types.js';
-import { deductTokens } from './shared.js';
+import type { ToolDefinition, PolicyDecision } from './types.js';
+import { deductTokens, authorizeViaBridge, originOf, reportActionResult } from './shared.js';
 
 // Observe - read operation with perception (Readability+Turndown)
 export const observeTool: ToolDefinition = {
@@ -20,8 +20,58 @@ export const observeTool: ToolDefinition = {
     tokenCost: 50,
   },
   execute: async (args, context) => {
-    deductTokens(context.tokenBudget, 50);
     const includeMarkdown = args.includeMarkdown as boolean ?? true;
+    const origin = originOf(context.dom.url);
+
+    // Route read operations through bridge PolicyEngine for authorization
+    let decision: PolicyDecision | null = null;
+    let actionHash: string | null = null;
+    if (!context.preAuthorized) {
+      const auth = await authorizeViaBridge({
+        type: 'POLICY_CHECK',
+        payload: {
+          session_id: context.sessionId,
+          action: 'observe',
+          origin,
+          target: context.dom.url,
+          arguments: { includeMarkdown },
+          page_revision: context.pageRevision,
+        },
+      });
+      decision = auth.decision;
+      actionHash = auth.actionHash;
+
+      if (!decision || !decision.allowed) {
+        return {
+          success: false,
+          error: decision?.reason || 'Bridge unreachable',
+          summary: `Observe blocked: ${decision?.reason || 'bridge unreachable'}`,
+          navigationOccurred: false,
+          requiresConfirmation: decision?.requires_confirmation,
+        };
+      }
+
+      if (decision.requires_confirmation && !context.preAuthorized) {
+        return {
+          success: false,
+          error: 'Requires confirmation',
+          summary: 'Observe requires confirmation',
+          navigationOccurred: false,
+          requiresConfirmation: true,
+          confirmationData: {
+            origin,
+            action: 'observe',
+            target: context.dom.url,
+            data: { includeMarkdown },
+            reversible: true,
+            riskClass: decision.risk_class,
+          },
+        };
+      }
+    }
+
+    // Deduct tokens only after authorization passes
+    deductTokens(context.tokenBudget, 50);
 
     // Run perception in content script
     let perceptionResult;
@@ -34,6 +84,7 @@ export const observeTool: ToolDefinition = {
         args: [includeMarkdown],
       });
     } catch (e) {
+      await reportActionResult(context.sessionId, actionHash, false, String(e));
       return { success: false, error: String(e), summary: 'Observe failed', navigationOccurred: false };
     }
 
@@ -51,6 +102,8 @@ export const observeTool: ToolDefinition = {
       markdown_content: perception?.markdown_content || '',
       ref_id_map: perception?.ref_id_map || {},
     };
+
+    await reportActionResult(context.sessionId, actionHash, true);
 
     return {
       success: true,

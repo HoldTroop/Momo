@@ -1,5 +1,5 @@
-import type { ToolDefinition } from './types.js';
-import { deductTokens } from './shared.js';
+import type { ToolDefinition, PolicyDecision } from './types.js';
+import { deductTokens, authorizeViaBridge, originOf, reportActionResult } from './shared.js';
 
 // Extract - read operation with perception (Readability+Turndown)
 export const extractTool: ToolDefinition = {
@@ -24,12 +24,61 @@ export const extractTool: ToolDefinition = {
     tokenCost: 20,
   },
   execute: async (args, context) => {
-    deductTokens(context.tokenBudget, 20);
-
     const selector = args.selector as string;
     const schema = args.schema as Record<string, { selector?: string; attribute?: string; text?: boolean }>;
     const multiple = args.multiple as boolean ?? false;
     const includeMarkdown = args.includeMarkdown as boolean ?? true;
+    const origin = originOf(context.dom.url);
+
+    // Route read operations through bridge PolicyEngine for authorization
+    let decision: PolicyDecision | null = null;
+    let actionHash: string | null = null;
+    if (!context.preAuthorized) {
+      const auth = await authorizeViaBridge({
+        type: 'POLICY_CHECK',
+        payload: {
+          session_id: context.sessionId,
+          action: 'extract',
+          origin,
+          target: selector,
+          arguments: { selector, schema, multiple, includeMarkdown },
+          page_revision: context.pageRevision,
+        },
+      });
+      decision = auth.decision;
+      actionHash = auth.actionHash;
+
+      if (!decision || !decision.allowed) {
+        return {
+          success: false,
+          error: decision?.reason || 'Bridge unreachable',
+          summary: `Extract blocked: ${decision?.reason || 'bridge unreachable'}`,
+          navigationOccurred: false,
+          requiresConfirmation: decision?.requires_confirmation,
+        };
+      }
+
+      if (decision.requires_confirmation && !context.preAuthorized) {
+        return {
+          success: false,
+          error: 'Requires confirmation',
+          summary: 'Extract requires confirmation',
+          navigationOccurred: false,
+          requiresConfirmation: true,
+          confirmationData: {
+            origin,
+            action: 'extract',
+            target: selector,
+            data: { selector, schema, multiple, includeMarkdown },
+            reversible: true,
+            riskClass: decision.risk_class,
+          },
+        };
+      }
+    }
+
+    // Deduct tokens only after authorization passes
+    deductTokens(context.tokenBudget, 20);
 
     // Run both extraction and perception in parallel
     let extractResult;
@@ -69,6 +118,7 @@ export const extractTool: ToolDefinition = {
         }),
       ]);
     } catch (e) {
+      await reportActionResult(context.sessionId, actionHash, false, String(e));
       return { success: false, error: String(e), summary: 'Extract failed', navigationOccurred: false };
     }
 
@@ -80,6 +130,8 @@ export const extractTool: ToolDefinition = {
       url: string;
       timestamp: number;
     } | null;
+
+    await reportActionResult(context.sessionId, actionHash, true);
 
     return {
       success: true,
