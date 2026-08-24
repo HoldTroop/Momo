@@ -54,9 +54,11 @@ export class NetworkInterceptor {
 
     if (!this.listener) {
       this.listener = (details) => this.handleRequest(details);
+      // Note: addListener type signature requires BlockingResponse return,
+      // but we're using it for observation only (no blocking behavior)
       chrome.webRequest.onBeforeRequest.addListener(
-        this.listener,
-        { urls: ['<all_urls>'], tabId },
+        this.listener as Parameters<typeof chrome.webRequest.onBeforeRequest.addListener>[0],
+        { urls: ['<all_urls>'] },
         ['requestBody']
       );
     }
@@ -67,7 +69,9 @@ export class NetworkInterceptor {
    */
   disable(): void {
     if (this.listener) {
-      chrome.webRequest.onBeforeRequest.removeListener(this.listener);
+      chrome.webRequest.onBeforeRequest.removeListener(
+        this.listener as Parameters<typeof chrome.webRequest.onBeforeRequest.addListener>[0]
+      );
       this.listener = null;
     }
     if (this.timeoutHandle) {
