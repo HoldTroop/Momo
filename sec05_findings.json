@@ -1,0 +1,68 @@
+{
+  "agent_id": "SEC-05",
+  "findings": [
+    {
+      "severity": "CRITICAL",
+      "finding": "Audit log has no integrity protection — no Merkle tree, cryptographic signatures, or append-only enforcement",
+      "location": "bridge/src/policy.rs:510-535, bridge/src/policy.rs:174-188",
+      "evidence": "log_audit() does raw INSERT into SQLite audit_log table (lines 510-535). Schema (lines 174-188) has no hash chain, signature, or tamper-evident column. Any process with write access to policy.db can silently modify, delete, or forge entries.",
+      "impact": "Complete audit trail forgery. Attacker can erase evidence of malicious actions, fabricate compliant history, or frame legitimate sessions.",
+      "poc": "sqlite3 ~/.local/share/autonomous-agent/policy.db \"UPDATE audit_log SET outcome='Success' WHERE outcome='Denied';\"",
+      "recommendation": "Add append-only Merkle tree (hash chain over entries) with periodic root anchoring, or use SQLite's immutable PRAGMA + WAL mode with external audit log signing."
+    },
+    {
+      "severity": "HIGH",
+      "finding": "ActionResult endpoint allows any authenticated client to flip Pending/Escalated audit outcomes to Success/Failed for any session",
+      "location": "bridge/src/main.rs:270-286, bridge/src/policy.rs:542-564",
+      "evidence": "ActionResult handler (main.rs:270-286) calls update_audit_outcome with attacker-controlled action_hash and session_id. update_audit_outcome (policy.rs:542-564) updates WHERE action_hash=? AND session_id=? AND outcome IN ('Pending','Escalated'). No verification that the requesting connection owns the session_id. The action_hash is returned from authorize() so a compromised connection can tamper with other sessions' entries.",
+      "impact": "Audit outcome tampering: authorized-but-unexecuted actions (Pending) can be falsely marked Success; escalated actions requiring human approval can be auto-approved.",
+      "poc": "1. Connect as authenticated client. 2. Send ActionResult { session_id: \"victim-session\", action_hash: \"observed-hash\", outcome: \"success\" }. 3. Victim's Pending entry becomes Success.",
+      "recommendation": "Bind ActionResult to the originating WebSocket connection (store connection_id in audit_entry, verify on update). Or require action_hash to be single-use and consume it on first update."
+    },
+    {
+      "severity": "MEDIUM",
+      "finding": "SQLite database file permissions allow any same-user process to read/modify audit log directly",
+      "location": "bridge/src/main.rs:80-86",
+      "evidence": "DB created at dirs::data_dir()/autonomous-agent/policy.db (line 82-83) with create_dir_all (line 85). No explicit file mode set — inherits umask (typically 0644 or 0600). Any process running as the same UID can open the SQLite file and execute arbitrary SQL.",
+      "impact": "Local privilege escalation / lateral movement: compromised low-privilege process (e.g., browser renderer) can corrupt audit log, steal session data, or modify policy config.",
+      "poc": "sqlite3 ~/.local/share/autonomous-agent/policy.db \".tables\" — then arbitrary SQL.",
+      "recommendation": "Set restrictive file mode (0600) on DB creation. Consider SELinux/AppArmor profile. Long-term: move audit log to append-only syslog/remote collector."
+    },
+    {
+      "severity": "MEDIUM",
+      "finding": "No session-binding on ActionResult — any authenticated connection can update any session's audit entry",
+      "location": "bridge/src/main.rs:270-286, bridge/src/ws_server.rs:398-436",
+      "evidence": "process_frame (ws_server.rs:398-436) only checks authentication token, not session ownership. ActionResult handler (main.rs:270-286) accepts any session_id/action_hash pair. Connection's session_id is tracked (ws_server.rs:456-462) but never validated against ActionResult payload.",
+      "impact": "Cross-session audit tampering: compromised extension/client can rewrite other sessions' outcomes.",
+      "poc": "Authenticated connection A sends ActionResult for session_id=\"session-B\" with action_hash from session B's authorize response.",
+      "recommendation": "Validate that ActionResult.session_id matches the connection's registered session_id (from PolicyCheck). Reject if mismatch."
+    },
+    {
+      "severity": "INFO",
+      "finding": "action_hash = SHA256(serialized PolicyRequest) — collision/preimage resistance relies on SHA256; attacker controls full input",
+      "location": "bridge/src/main.rs:128",
+      "evidence": "let action_hash = format!(\"{:x}\", Sha256::digest(serde_json::to_string(&request)?.as_bytes())); (line 128). SHA256 is cryptographically strong; chosen-prefix collisions infeasible. No practical exploit.",
+      "impact": "Theoretical only. No actionable vector without SHA256 break.",
+      "poc": "N/A",
+      "recommendation": "No change needed. Monitor for SHA256 deprecation."
+    },
+    {
+      "severity": "LOW",
+      "finding": "get_audit_log has no OFFSET support but limit capped at 1000; full table scan on large logs may cause latency",
+      "location": "bridge/src/policy.rs:566-611, bridge/src/main.rs:308-319",
+      "evidence": "get_audit_log (policy.rs:566-611) builds query with LIMIT ? (capped at 1000, line 567). No OFFSET parameter. Handler (main.rs:309) also caps at 1000. Large audit_log table (no WHERE session_id) triggers full scan + filesort.",
+      "impact": "Potential DoS via resource exhaustion if audit_log grows unbounded (no retention enforcement).",
+      "poc": "Call PolicyGetAuditLog { session_id: null, limit: 1000 } repeatedly on DB with 1M+ rows.",
+      "recommendation": "Add OFFSET pagination with max offset cap. Enforce DataRetentionPolicy (currently stubbed, policy.rs:32-41)."
+    },
+    {
+      "severity": "LOW",
+      "finding": "DataRetentionPolicy enum persists to DB but is not enforced — audit log grows unbounded",
+      "location": "bridge/src/policy.rs:32-41, bridge/src/policy.rs:194-198",
+      "evidence": "DataRetentionPolicy::Session vs Persistent (lines 38-41) with TODO comment (lines 32-34) stating not enforced. policy_config table (lines 194-198) stores it but no cleanup job exists.",
+      "impact": "Unbounded audit log growth → disk exhaustion, query latency degradation.",
+      "poc": "Run agent for extended period; audit_log table grows without bound.",
+      "recommendation": "Implement retention enforcement: background job to DELETE FROM audit_log WHERE timestamp < cutoff based on policy."
+    }
+  ]
+}

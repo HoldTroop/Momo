@@ -1,5 +1,6 @@
 import { MessageRouter } from './message-router.js';
 import { AgentOrchestrator } from './orchestrator.js';
+import { validatePortMessage } from '../lib/message-validator.js';
 
 interface PortConnection {
   port: chrome.runtime.Port;
@@ -69,7 +70,17 @@ export class PortManager {
     const connection = this.connections.get(connectionId);
     if (!connection) return;
 
-    const msg = message as { type: string; payload?: unknown; requestId?: string };
+    let msg: { type: string; payload?: unknown; requestId?: string };
+    try {
+      msg = validatePortMessage(message);
+    } catch (e) {
+      console.warn('[PortManager] Dropped invalid port message', {
+        error: e instanceof Error ? e.message : String(e),
+        connectionId,
+        portType: connection.type,
+      });
+      return;
+    }
 
     try {
       let response: unknown;

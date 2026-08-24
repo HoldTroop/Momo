@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { PlanStep } from '../sw/orchestrator.js';
+import { validatePortMessage } from '../lib/message-validator.js';
 
 interface ToolCall {
   name: string;
@@ -95,7 +96,17 @@ function App() {
   const portRef = useRef<chrome.runtime.Port | null>(null);
   const handlePortMessageRef = useRef<(msg: PortMessage) => void>(() => {});
   const loadSessionsRef = useRef<() => void>(() => {});
-  const runtimeListener = useRef((msg: PortMessage) => {
+  const runtimeListener = useRef((message: unknown) => {
+    let msg: PortMessage;
+    try {
+      const validated = validatePortMessage(message);
+      msg = validated as PortMessage;
+    } catch (e) {
+      console.warn('[SidePanel] Dropped invalid runtime message', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return;
+    }
     handlePortMessageRef.current(msg);
   }).current;
 
@@ -108,7 +119,17 @@ function App() {
       const port = chrome.runtime.connect({ name: 'sidepanel' });
       portRef.current = port;
 
-      port.onMessage.addListener((msg) => {
+      port.onMessage.addListener((message: unknown) => {
+        let msg: PortMessage;
+        try {
+          const validated = validatePortMessage(message);
+          msg = validated as PortMessage;
+        } catch (e) {
+          console.warn('[SidePanel] Dropped invalid port message', {
+            error: e instanceof Error ? e.message : String(e),
+          });
+          return;
+        }
         reconnectAttempts = 0;
         handlePortMessageRef.current(msg);
       });

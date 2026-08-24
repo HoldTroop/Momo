@@ -1,5 +1,7 @@
 // Chrome extension API types are provided by @types/chrome (see tsconfig `types`).
 
+import { validateIncomingMessage } from '../lib/message-validator.js';
+
 interface AxNode {
   role: string;
   name: string;
@@ -176,14 +178,27 @@ class AxTreeExtractor {
     }
   }
 
-  private handleMessage(message: ExtractorMessage, sender: chrome.runtime.MessageSender, sendResponse: (response: ExtractorResponse) => void) {
-    switch (message.type) {
+  private handleMessage(message: unknown, sender: chrome.runtime.MessageSender, sendResponse: (response: ExtractorResponse) => void) {
+    let msg: ExtractorMessage;
+    try {
+      const validated = validateIncomingMessage(message);
+      msg = validated as ExtractorMessage;
+    } catch (e) {
+      console.warn('[AX Extractor] Dropped invalid message', {
+        error: e instanceof Error ? e.message : String(e),
+        senderId: sender.id,
+        senderUrl: sender.url,
+      });
+      return;
+    }
+
+    switch (msg.type) {
       case 'GET_AX_TREE':
         this.getAxTree().then(tree => sendResponse({ axTree: tree }));
         break;
       case 'CDP_ATTACHED':
-        if (message.payload?.sessionId) {
-          this.cdpSessionId = message.payload.sessionId;
+        if (msg.payload?.sessionId) {
+          this.cdpSessionId = msg.payload.sessionId;
           if (import.meta.env.DEV) {
             console.log('[AX Extractor] CDP session updated:', this.cdpSessionId);
           }

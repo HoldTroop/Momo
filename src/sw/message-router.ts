@@ -2,6 +2,7 @@ import { AgentOrchestrator, HumanResponse, BridgeEvent, BridgeCommand, Plan, Tas
 import { cdpAdapter } from './cdp-adapter.js';
 import { redactText } from '../lib/redaction.js';
 import { getWsClient, initWsClient } from './ws-client.js';
+import { validateIncomingMessage, validateBridgeEvent, validateBridgeCommand } from '../lib/message-validator.js';
 
 export class MessageRouter {
   private orchestrator: AgentOrchestrator;
@@ -68,6 +69,14 @@ export class MessageRouter {
   }
 
   private handleBridgeEvent(event: BridgeEvent) {
+    try {
+      validateBridgeEvent(event);
+    } catch (e) {
+      console.warn('[MessageRouter] Dropped invalid bridge event', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return;
+    }
     // Forward async events (policy_changed, audit_log_append, etc.) to side panel
     void chrome.runtime.sendMessage({ type: 'BRIDGE_EVENT', payload: event }).catch((err) => console.warn('[Momo] Handled error:', err));
   }
@@ -76,8 +85,13 @@ export class MessageRouter {
    * Always answers (success or error) so the bridge's `send_command` resolves
    * instead of timing out (§6.4). */
   private async handleBridgeCommand(cmd: BridgeCommand) {
-    if (!cmd.request_id) {
-      console.warn('[MessageRouter] Bridge command missing request_id, dropping');
+    try {
+      validateBridgeCommand(cmd);
+    } catch (e) {
+      console.warn('[MessageRouter] Dropped invalid bridge command', {
+        error: e instanceof Error ? e.message : String(e),
+        hasRequestId: typeof (cmd as { request_id?: unknown }).request_id === 'string',
+      });
       return;
     }
     try {
@@ -247,7 +261,18 @@ export class MessageRouter {
       return { error: 'Untrusted sender' };
     }
 
-    const msg = message as { type: string; payload?: unknown };
+    let msg: { type: string; payload?: unknown };
+    try {
+      msg = validateIncomingMessage(message);
+    } catch (e) {
+      console.warn('[MessageRouter] Dropped invalid message', {
+        error: e instanceof Error ? e.message : String(e),
+        hasSender: sender !== undefined,
+        senderTab: sender?.tab?.id,
+      });
+      return { error: 'Invalid message structure' };
+    }
+
     const handler = this.handlers.get(msg.type);
 
     if (!handler) {
