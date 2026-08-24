@@ -20,7 +20,7 @@ describe('PersistenceManager init() concurrency and failure handling', () => {
     const initSpy = vi.spyOn(pm as any, '_doInit');
 
     // Call two guarded methods "simultaneously" - don't await between them
-    const p1 = pm.saveSession('test-session-1', { goal: 'test', plan: null, currentStep: 0, history: [], variables: {}, checkpoints: [], paused: false, pageRevision: 0, allowlist: [], tokenBudget: { max: 100, used: 0 }, pendingHumanIntervention: null });
+    const p1 = pm.saveSession('test-session-1', { sessionId: 'test-session-1', goal: 'test', plan: null, currentStep: 0, history: [], variables: {}, checkpoints: [], paused: false, pageRevision: 0, allowlist: [], tokenBudget: { max: 100, used: 0 }, pendingHumanIntervention: null, status: 'running', error: null });
     const p2 = pm.getSession('test-session-2');
 
     await Promise.all([p1, p2]);
@@ -46,7 +46,7 @@ describe('PersistenceManager init() concurrency and failure handling', () => {
     await pm.init();
 
     // Verify the guard pattern works
-    await pm.saveSession('test', { goal: 'test', plan: null, currentStep: 0, history: [], variables: {}, checkpoints: [], paused: false, pageRevision: 0, allowlist: [], tokenBudget: { max: 100, used: 0 }, pendingHumanIntervention: null });
+    await pm.saveSession('test', { sessionId: 'test', goal: 'test', plan: null, currentStep: 0, history: [], variables: {}, checkpoints: [], paused: false, pageRevision: 0, allowlist: [], tokenBudget: { max: 100, used: 0 }, pendingHumanIntervention: null, status: 'running', error: null });
   });
 
   it('getDb() throws clear error before init', async () => {
